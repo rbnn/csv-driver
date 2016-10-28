@@ -1,0 +1,194 @@
+#!/bin/sh
+
+program_name=${0##*/}
+usage_message="Invalid usage! See \`$program_name --help' for help."
+_echo="/bin/echo"
+_awk="/usr/bin/mawk"
+_sort="/usr/bin/sort --buffer-size=3G"
+
+default_format="%i"
+default_fsep=,
+
+# Detect mode and configure command appropriately
+case $program_name in
+  xawk)
+    # Detected awk-mode
+    # OFS  --> Set output field separator
+    # OFMT --> Configure default float format
+    external="$_awk -F %fs -v OFMT=%.8f -v OFS=%fs"
+    format="-v column_%n=%i"
+    options=
+    special_mode=1
+    ;;
+
+  xfind)
+    # Detect find-mode
+    format="%i"
+    options=-H
+    special_mode=1
+    ;;
+
+  xsort)
+    # Detected sort-mode
+    external="$_sort -t %fs"
+    format="--key=%i,%i%o"
+    options=
+    special_mode=1
+    ;;
+esac
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o f:t:o:c:hHE:d -l help -n "$program_name" -- "$@" $options)
+eval set -- "$args"
+
+num_fields=0
+
+# Parse arguments
+while true; do
+  case $1 in
+    -f)
+      # Specify field
+      num_fields=$((num_fields + 1))
+      fields[$num_fields]=${2:?Invalid field name.}
+      shift 2
+      ;;
+
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=${2:?Invalid field separator.}
+      shift 2
+      ;;
+
+    -o)
+      # Print warning if overwriting mode-default
+      [ 0 != ${special_mode:-0} ] && echo "Overwriting mode-specific format!" > /dev/stderr
+
+      # Change output format (default is `--key=%i,%in' for gnu-sort)
+      format=$2
+      shift 2
+      ;;
+
+    -c)
+      # Print warning if overwriting mode-default
+      [ 0 != ${special_mode:-0} ] && echo "Overwriting mode-specific command!" > /dev/stderr
+
+      # Run external command on body
+      external=${2:?Invalid command.}
+      shift 2
+      ;;
+
+    -H)
+      # Suppress header in output
+      no_header=1
+      shift
+      ;;
+
+    -E)
+      # Feed header to command
+      exec_header=1
+      shift
+      ;;
+
+    -d)
+      # Dry-run, don't execute the command but print what would have been done
+      dry_run=1;
+      shift
+      ;;
+
+    -h|--help)
+      # Print help message
+      cat << EOF
+Usage: $program_name [OPT..] [-- ...]   -- driver for external program
+
+This tool helps running external programs with data files, that contain header
+information (e.g. CSV with header). The command generation for an external
+program is controlled via format-options to translate field-names into
+column-indices. Some frequently used external programs are preconfigured and
+can be accessed fast by linking this tool to the appropriate target:
+  ln xdriver xawk  -- Enable (m)awk mode
+  ln xdriver xsort -- Enable gnu-sort from coreutils
+  ln xdriver xfind -- Find column index
+
+Available options:
+  -f FIELD[:FOPT] Find index for FIELD in header, or fail. Field-OPTions can be
+                  specified (e.g. for sort). This option may appear multiple times.
+  -t FS           Use FS as field separator (default: $default_fsep)
+  -o FMT          Use FMT to generate the result for field indices. Tokens
+                  '%n', '%i' and '%o' will be replaced by FIELD, OPT or the
+                  field index. This option should not be used, when a special
+                  mode is detected, as it will overwrite mode-specifi options.
+  -c CMD          Run CMD with FMT-results. The options gerenated by FMT are
+                  appended. Also options passed after '--' are passed as they
+                  are. This option should not be used, when a special mode is
+                  detected, as it will overwrite mode-specifi options.
+  -h              Disable writing the input header.
+  -e              Pass the input header to CMD.
+  -d              Do not run CMD, but print what would be done.
+  -h, --help      Print this message and terminate
+
+Following input are equivalent to special modes:
+  xawk  --> -c $_awk -F %fs -v OFMT=%.8f -v OFS=%fs -o '-v column_%n=%i'
+  xfind --> -o '%i' -H
+  xsort --> -c $_sort -t %fs -o '--key=%i,%i%o'
+EOF
+      exit 0
+      ;;
+ 
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+# Set input field separator from variable or default
+IFS= read -r raw_header
+IFS=${fsep:-$default_fsep} read -r -a header <<< $raw_header
+
+run_cmd=$(sed "s|%fs|${fsep:-$default_fsep}|g" <<< ${external:-$_echo})
+
+# Try finding all specified fields
+for field in "${fields[@]}"; do
+  # Check for non-empty field name
+  _N=${field:?No field name!}
+  _N=${_N%%:*}
+
+  # Keep suffix from field name, i.e. from next character on after `:'
+  _O=${field:$((${#_N} + 1))}
+  
+  # Reset variables
+  column_nr=1
+  index=
+  
+  for name in "${header[@]}"; do
+    if [ "$name" == "$_N" ]; then
+      index=$column_nr;
+      break;
+    fi
+  
+    column_nr=$((column_nr + 1))
+  done
+  
+  # Replace `%n', `%i' and `%o'
+  # %n -- will be replaced by the field name
+  # %i -- is replaced by the column number
+  # %o -- is replaced by the field options (FIELD:OPTS)
+  _I=${index:?No such field: $_N}
+
+  # Update command line
+  run_cmd+=" "$(sed -e "s|%n|$_N|g" -e "s|%i|$_I|g" -e "s|%o|$_O|g" <<< ${format:-$default_format})
+
+done
+
+# Optionally prepend(default) or suppress header to output
+[ 0 != ${no_header:-0} ] || echo $raw_header
+
+# Prepend echo-command for dry-run-mode
+[ 0 != ${dry_run:-0} ] && run_cmd="$_echo "$run_cmd
+
+# Optionally insert header into body (not default)
+if [ 0 != ${exec_header:-0} ]; then
+  (echo $raw_header && cat)
+else
+  cat
+fi | $run_cmd "$@"
