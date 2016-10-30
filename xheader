@@ -1,0 +1,66 @@
+#!/bin/sh
+
+# Parse command line arguments and feed parsed arguments
+# -l prefix:,skip,suffix: 
+args=$(getopt -o di:r:s -l delete,insert:,replace:,skip -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+# Parse arguments
+while true; do
+  case $1 in
+    -i|--insert)
+      # Insert new header as first line
+      insert_header=$2
+      shift 2
+      ;;
+
+    -r|--replace)
+      # Replace current header
+      replace_header=$2
+      shift 2
+      ;;
+
+    -d|--delete)
+      # Delete current header
+      delete_header=1
+      shift
+      ;;
+
+    -s|--skip)
+      # Print current header but don't print data
+      skip_data=1
+      shift
+      ;;
+
+    -h|--help)
+      cat << EOF
+  -i|--insert STR   Insert STR as header
+  -r|--replace STR  Replace STR as header
+  -d|--delete       Delete header
+  -s|--skip         Skip data
+  -h|--help         Print this message and terminate
+EOF
+      exit 0
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+# Insert header
+[ x"" != x$insert_header ] && echo $insert_header
+
+# Read header from input on delete or replace header
+if [ 0 != ${delete_header:-0} ] || [ x"" != x$replace_header ]; then
+  # Consume exsiting header
+  IFS= read -r raw_header
+
+  # Replace header
+  [ x"" != x$replace_header ] && echo $replace_header
+fi
+
+# Skip remaining data
+[ 0 != ${skip_data:-0} ] || cat
