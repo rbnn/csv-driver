@@ -43,7 +43,7 @@ function set_fsep()
 function replace_fsep()
 {
   # Read command
-  declare -r cmd=${1:?Invalid input}
+  declare -r cmd=${1:-""}
   shift
 
   # Read field-separator

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 export enable_stack_trace="yes"
-source ./xcommon
+source ./xbase
 
 program_name=${0##*/}
 usage_message="Invalid usage! See \`$program_name --help' for help."
@@ -20,6 +20,7 @@ case $program_name in
 
   xfind)
     # Detect find-mode
+    external="$_echo"
     format="%i"
     options=-H
     special_mode=1
@@ -143,7 +144,7 @@ Available options:
 
 Following input are equivalent to special modes:
   xawk  --> -c $_awk -F %fs -v OFMT=%.8f -v OFS=%fs -o '-v column_%n=%i'
-  xfind --> -o '%i' -H
+  xfind --> -c $_echo -o '%i' -H
   xshuf --> -c $_shuf
   xsort --> -c $_sort -t %fs -o '--key=%i,%i%o'
 EOF
@@ -156,6 +157,8 @@ EOF
       ;;
   esac
 done
+
+[ -z "$external" ] && die -1 "Missing external command"
 
 # Set input field separator from variable or default
 IFS= read -r raw_header
@@ -183,7 +186,7 @@ for i in `seq 1 "${#x_index[@]}"`; do
 done
 
 # Optionally prepend(default) or suppress header to output
-[ 0 != ${no_header:-0} ] || echo $(join_by x_fields[@] $fsep)
+[ 0 != ${no_header:-${dry_run:-0}} ] || echo $(join_by x_fields[@] $fsep)
 
 # Prepend echo-command for dry-run-mode
 [ 0 != ${dry_run:-0} ] && cmd="$_echo "$cmd
