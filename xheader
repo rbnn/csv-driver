@@ -1,8 +1,7 @@
 #!/bin/sh
 
 # Parse command line arguments and feed parsed arguments
-# -l prefix:,skip,suffix: 
-args=$(getopt -o di:r:s -l delete,insert:,replace:,skip -n ${0##*/} -- "$@")
+args=$(getopt -o dhi:r:su -l delete,help,insert:,replace:,skip,unique -n ${0##*/} -- "$@")
 eval set -- "$args"
 
 # Parse arguments
@@ -32,12 +31,19 @@ while true; do
       shift
       ;;
 
+    -u|--unique)
+      # Remove repeated headers
+      unique_header=1
+      shift
+      ;;
+
     -h|--help)
       cat << EOF
   -i|--insert STR   Insert STR as header
   -r|--replace STR  Replace STR as header
   -d|--delete       Delete header
   -s|--skip         Skip data
+  -u|--unique       Remove repeated header definitions
   -h|--help         Print this message and terminate
 EOF
       exit 0
@@ -51,16 +57,30 @@ EOF
 done
 
 # Insert header
-[ x"" != x$insert_header ] && echo $insert_header
-
-# Read header from input on delete or replace header
-if [ 0 != ${delete_header:-0} ] || [ x"" != x$replace_header ]; then
+if [ x"" != x$insert_header ]; then
+  raw_header=$insert_header
+else
   # Consume exsiting header
   IFS= read -r raw_header
+fi
 
-  # Replace header
-  [ x"" != x$replace_header ] && echo $replace_header
+# Replace header
+if [ x"" != x$replace_header ]; then
+  raw_header=$replace_header
+fi
+
+# Delete header
+if [ 0 != ${delete_header:-0} ]; then
+  raw_header=""
+fi
+
+if [ 0 == ${delete_header:-0} ]; then
+  echo $raw_header
 fi
 
 # Skip remaining data
-[ 0 != ${skip_data:-0} ] || cat
+if [ 0 == ${skip_data:-0} ]; then
+  if [ 0 == ${unique_header:-0} ]; then cat
+  else fgrep -v "$raw_header"
+  fi
+fi

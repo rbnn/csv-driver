@@ -1,0 +1,29 @@
+#!/bin/sh
+default_pattern='^[[:space:]]*#'
+
+args=$(getopt -o p:c: -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+while true; do
+  case $1 in
+    -c)
+      # Change only comment character
+      pattern="^[[:space:]]*$2"
+      shift 2
+      ;;
+
+    -p)
+      # Change complete comment pattern
+      pattern=$2
+      shift 2
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+# Keep only lines without pattern
+egrep -v "${pattern:-$default_pattern}"

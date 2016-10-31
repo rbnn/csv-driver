@@ -1,0 +1,218 @@
+#!/bin/sh
+
+# Default commands
+_awk="/usr/bin/mawk"
+_cut="/usr/bin/cut -d%fs"
+_echo="/bin/echo"
+_shuf="/usr/bin/shuf"
+_sort="/usr/bin/sort --buffer-size=3G"
+
+function warning()
+{
+  echo "Warning: $@" >&2
+}
+
+function die()
+{
+  return_code=$1
+  shift
+
+  if [ x"yes" = x${enable_stack_trace:-no} ]; then
+    local frame=0
+    echo "Call stack:" >&2
+    while caller $frame; do
+      # Read next frame
+      frame=$((frame + 1));
+    done >&2
+  fi
+
+  echo "Error: $@" >&2
+  exit $return_code
+}
+
+function set_fsep()
+{
+  # Read (optional) field-separator
+  # Default is comma
+  declare -r fsep=${1:-,}
+  shift
+
+  echo $fsep
+}
+
+function replace_fsep()
+{
+  # Read command
+  declare -r cmd=${1:?Invalid input}
+  shift
+
+  # Read field-separator
+  declare -r sep=${1:?Invalid field separator}
+  shift
+
+  # Read (optional) pattern for field-separator
+  # Default pattern is `%fs'
+  declare -r var=${1:-%fs}
+  shift
+
+  sed "s@$var@$sep@g" <<< "$cmd"
+}
+
+function join_by()
+{
+  # Read header names as first argument
+  declare -ra x=("${!1:?Missing array}")
+  shift
+
+  # Read (optional) field-separator
+  # Default field-separator is comma `,'
+  local IFS=${1:-,}
+  shift
+
+  echo "${x[*]}"
+}
+
+function parse_header()
+{
+  # Line containing header
+  declare -r header=${1:?Missing header}
+  shift
+
+  declare -r fsep=${1:?Missing field separator}
+  shift
+
+  # Variable name prefix
+  declare -r prefix=${1:-""}
+  shift
+
+  local IFS="$fsep"
+  declare -a fields
+  declare -a columns
+
+  read -r -a columns <<< "$header"
+
+  for fn in "${columns[@]}"; do
+    # Save current field name and options
+    declare -i cnt=$((${#fields[@]} + 1))
+    fields[$cnt]=${fn:?Empty field name}
+  done
+
+  # Export arrays with prefix as global variables
+  eval "$prefix""fields"='("${fields[@]}")'
+}
+
+function find_fields()
+{
+  # Read header names as first argument
+  declare -ra header=(${!1:?Missing header})
+  shift
+
+  # Read prefix
+  declare -r prefix=${1?Missing prefix}
+  shift
+
+  declare -a index
+  declare -a found
+  declare -a flags
+
+  for fn in "$@"; do
+
+    declare -i fn_idx=-1
+    declare -i hn_idx=0
+
+    # Check for non-empty field name
+    _N=${fn:?Empty field name}
+    _N=${_N%%:*}
+
+    # Keep suffix from field name, i.e. from next character on after `:'
+    _O=${fn:$((${#_N} + 1))}
+
+    for hn in "${header[@]}"; do
+      if [ "$hn" = "$_N" ]; then
+        fn_idx=$hn_idx
+        break
+      fi
+
+      hn_idx=$((hn_idx + 1))
+    done
+
+    # Raise error, if field could not be found
+    [ -1 -eq $fn_idx ] && die -1 "No such field: $fn"
+
+    declare -i cnt=${#index[@]}
+    index[$cnt]=$fn_idx
+    flags[$cnt]=$_O
+  done
+
+  # Sort selected fields by column-number
+  declare -i idx
+  declare -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
+
+  for idx in "${sorted_index[@]}"; do
+    declare -i cnt=${#found[@]}
+    found[$cnt]=${header[$idx]}
+  done
+
+  # Export arrays with prefix as global variables
+  eval "$prefix""index"='("${index[@]}")'
+  eval "$prefix""found"='("${found[@]}")'
+  eval "$prefix""flags"='("${flags[@]}")'
+}
+
+function select_all_fields()
+{
+  # Read header names as first argument
+  declare -ra header=(${!1:?Missing header})
+  shift
+
+  # Read prefix
+  declare -r prefix=${1?Missing prefix}
+  shift
+
+  declare -a index
+  declare -a found
+  declare -a flags
+
+  for fn in "${header[@]}"; do
+
+    declare -i fn_idx=-1
+    declare -i hn_idx=0
+
+    # Check for non-empty field name
+    _N=${fn:?Empty field name}
+    _N=${_N%%:*}
+
+    # Keep suffix from field name, i.e. from next character on after `:'
+    _O=${fn:$((${#_N} + 1))}
+
+    for hn in "${header[@]}"; do
+      if [ "$hn" = "$_N" ]; then
+        fn_idx=$hn_idx
+        break
+      fi
+
+      hn_idx=$((hn_idx + 1))
+    done
+
+    # Raise error, if field could not be found
+    [ -1 -eq $fn_idx ] && die -1 "No such field: $fn"
+
+    declare -i cnt=${#index[@]}
+    index[$cnt]=$fn_idx
+    flags[$cnt]=$_O
+  done
+
+  # Sort selected fields by column-number
+  declare -i idx
+  declare -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
+
+  for idx in "${sorted_index[@]}"; do
+    declare -i cnt=${#found[@]}
+    found[$cnt]=${header[$idx]}
+  done
+
+  # Export arrays with prefix as global variables
+  eval "$prefix""index"='("${index[@]}")'
+  eval "$prefix""found"='("${found[@]}")'
+  eval "$prefix""flags"='("${flags[@]}")'
+}

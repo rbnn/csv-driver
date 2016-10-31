@@ -1,0 +1,82 @@
+#!/bin/sh
+
+export enable_stack_trace="yes"
+source ./xcommon
+
+program_name=${0##*/}
+usage_message="Invalid usage! See \`$program_name --help' for help."
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o dhf:t: -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+# Parse arguments
+while true; do
+  case $1 in
+    -d)
+      dry_run=1
+      shift
+      ;;
+      
+    -h|--help)
+      cat << EOF
+  -d          Dry run
+  -f FIELD
+  -t FS
+  -h|--help
+EOF
+      shift
+      exit 0
+      ;;
+
+    -f)
+      cnt=$((${#fields[@]} + 1))
+      fields[$cnt]=$2
+      shift 2
+      ;;
+
+    -t)
+      # Update field-separator
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+# Fields must be unique
+num_fields=${#fields[@]}
+num_unique=($(printf "%s\n" "${fields[@]}" | sort -u | wc -l))
+[ $num_fields -ne $num_unique ] && die -1 "Selected fields must be unique!"
+
+# Read first row and keep stdin open
+IFS= read -r raw_header
+
+# Parse head line into x_fields and x_flags
+parse_header "$raw_header" "$fsep" x_
+
+# Find columns in x_fields and store indices into x_index and x_found
+find_fields x_fields[@] x_ ${fields[@]}
+
+# Build final command
+cmd=""
+cmd+=$(replace_fsep "$_cut" "$fsep")
+
+declare -a x_column
+for idx in "${x_index[@]}"; do x_column[$idx]=$((idx + 1)); done
+cmd+=" -f "$(join_by x_column[@] ,)
+
+# Prepend header if not in dry-run mode
+[ 0 == ${dry_run:-0} ] && echo $(join_by x_found[@] "$fsep")
+
+# Prefix final command for dry-run
+[ 0 != ${dry_run:-0} ] && cmd="$_echo $cmd"
+
+$cmd

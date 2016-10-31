@@ -1,13 +1,10 @@
 #!/bin/sh
 
+export enable_stack_trace="yes"
+source ./xcommon
+
 program_name=${0##*/}
 usage_message="Invalid usage! See \`$program_name --help' for help."
-_echo="/bin/echo"
-_awk="/usr/bin/mawk"
-_sort="/usr/bin/sort --buffer-size=3G"
-
-default_format="%i"
-default_fsep=,
 
 # Detect mode and configure command appropriately
 case $program_name in
@@ -17,7 +14,7 @@ case $program_name in
     # OFMT --> Configure default float format
     external="$_awk -F %fs -v OFMT=%.8f -v OFS=%fs"
     format="-v column_%n=%i"
-    options=
+    options=-A
     special_mode=1
     ;;
 
@@ -25,6 +22,14 @@ case $program_name in
     # Detect find-mode
     format="%i"
     options=-H
+    special_mode=1
+    ;;
+
+  xshuf)
+    # Detected shuf-mode
+    external="$_shuf"
+    format=
+    options=
     special_mode=1
     ;;
 
@@ -37,44 +42,52 @@ case $program_name in
     ;;
 esac
 
+# Initialize default field-separator
+fsep=$(set_fsep)
+
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o f:t:o:c:hHE:d -l help -n "$program_name" -- "$@" $options)
+args=$(getopt -o f:t:o:c:hAHEd -l help -n "$program_name" -- $options "$@")
 eval set -- "$args"
 
-num_fields=0
+declare -a fields
 
 # Parse arguments
 while true; do
   case $1 in
     -f)
       # Specify field
-      num_fields=$((num_fields + 1))
-      fields[$num_fields]=${2:?Invalid field name.}
+      cnt=$((${#fields[@]} + 1))
+      fields[$cnt]=${2:?Invalid field name}
       shift 2
       ;;
 
     -t)
       # Change field sepearator (default is comma)
-      fsep=${2:?Invalid field separator.}
+      fsep=$(set_fsep $2)
       shift 2
       ;;
 
     -o)
       # Print warning if overwriting mode-default
-      [ 0 != ${special_mode:-0} ] && echo "Overwriting mode-specific format!" > /dev/stderr
+      [ 0 != ${special_mode:-0} ] && warning "Overwriting mode-specific format!"
 
-      # Change output format (default is `--key=%i,%in' for gnu-sort)
       format=$2
       shift 2
       ;;
 
     -c)
       # Print warning if overwriting mode-default
-      [ 0 != ${special_mode:-0} ] && echo "Overwriting mode-specific command!" > /dev/stderr
+      [ 0 != ${special_mode:-0} ] && warning "Overwriting mode-specific command!"
 
       # Run external command on body
-      external=${2:?Invalid command.}
+      external=${2:?Invalid command}
       shift 2
+      ;;
+
+    -A)
+      # Select all columns
+      select_all=1
+      shift
       ;;
 
     -H)
@@ -106,8 +119,9 @@ program is controlled via format-options to translate field-names into
 column-indices. Some frequently used external programs are preconfigured and
 can be accessed fast by linking this tool to the appropriate target:
   ln xdriver xawk  -- Enable (m)awk mode
-  ln xdriver xsort -- Enable gnu-sort from coreutils
   ln xdriver xfind -- Find column index
+  ln xdriver xshuf -- Enable gnu-shuf from coreutils
+  ln xdriver xsort -- Enable gnu-sort from coreutils
 
 Available options:
   -f FIELD[:FOPT] Find index for FIELD in header, or fail. Field-OPTions can be
@@ -121,14 +135,16 @@ Available options:
                   appended. Also options passed after '--' are passed as they
                   are. This option should not be used, when a special mode is
                   detected, as it will overwrite mode-specifi options.
-  -h              Disable writing the input header.
-  -e              Pass the input header to CMD.
+  -A              Select all columns
+  -H              Disable writing the input header.
+  -E              Pass the input header to CMD.
   -d              Do not run CMD, but print what would be done.
   -h, --help      Print this message and terminate
 
 Following input are equivalent to special modes:
   xawk  --> -c $_awk -F %fs -v OFMT=%.8f -v OFS=%fs -o '-v column_%n=%i'
   xfind --> -o '%i' -H
+  xshuf --> -c $_shuf
   xsort --> -c $_sort -t %fs -o '--key=%i,%i%o'
 EOF
       exit 0
@@ -143,52 +159,36 @@ done
 
 # Set input field separator from variable or default
 IFS= read -r raw_header
-IFS=${fsep:-$default_fsep} read -r -a header <<< $raw_header
 
-run_cmd=$(sed "s|%fs|${fsep:-$default_fsep}|g" <<< ${external:-$_echo})
+# Parse head line into x_fields and x_flags
+parse_header "$raw_header" "$fsep" x_
 
-# Try finding all specified fields
-for field in "${fields[@]}"; do
-  # Check for non-empty field name
-  _N=${field:?No field name!}
-  _N=${_N%%:*}
+if [ 0 == ${select_all:-0} ]; then
+  # Find columns in x_fields and store indices into x_index and x_found
+  find_fields x_fields[@] x_ ${fields[@]}
+else
+  select_all_fields x_fields[@] x_
+fi
 
-  # Keep suffix from field name, i.e. from next character on after `:'
-  _O=${field:$((${#_N} + 1))}
-  
-  # Reset variables
-  column_nr=1
-  index=
-  
-  for name in "${header[@]}"; do
-    if [ "$name" == "$_N" ]; then
-      index=$column_nr;
-      break;
-    fi
-  
-    column_nr=$((column_nr + 1))
-  done
-  
-  # Replace `%n', `%i' and `%o'
-  # %n -- will be replaced by the field name
-  # %i -- is replaced by the column number
-  # %o -- is replaced by the field options (FIELD:OPTS)
-  _I=${index:?No such field: $_N}
+cmd=$(replace_fsep "$external" "$fsep")
 
-  # Update command line
-  run_cmd+=" "$(sed -e "s|%n|$_N|g" -e "s|%i|$_I|g" -e "s|%o|$_O|g" <<< ${format:-$default_format})
+for i in `seq 1 "${#x_index[@]}"`; do 
+  idx=$((i - 1))
+  _C=${x_index[$idx]}
+  _O=${x_flags[$idx]}
+  _N=${x_fields[$_C]}
+  _I=$((_C + 1))
 
+  cmd+=" "$(sed -e "s|%n|$_N|g" -e "s|%i|$_I|g" -e "s|%o|$_O|g" <<< "${format:-"%i"}")
 done
 
 # Optionally prepend(default) or suppress header to output
-[ 0 != ${no_header:-0} ] || echo $raw_header
+[ 0 != ${no_header:-0} ] || echo $(join_by x_fields[@] $fsep)
 
 # Prepend echo-command for dry-run-mode
-[ 0 != ${dry_run:-0} ] && run_cmd="$_echo "$run_cmd
+[ 0 != ${dry_run:-0} ] && cmd="$_echo "$cmd
 
 # Optionally insert header into body (not default)
-if [ 0 != ${exec_header:-0} ]; then
-  (echo $raw_header && cat)
-else
-  cat
-fi | $run_cmd "$@"
+if [ 0 == ${exec_header:-0} ]; then cat
+else (echo $(join_by x_fields[@] $fsep) && cat)
+fi | $cmd "$@"
