@@ -1,0 +1,83 @@
+#!/bin/sh
+
+source ./xbase
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+field=class
+count=count
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o c:f:ht: -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+while true; do
+  case $1 in
+    -c)
+      # Configure column holding the class counts
+      count=${2:?Invalid count label}
+      shift 2
+      ;;
+
+    -f)
+      # Configure column, the data is taken from
+      field=${2:?Invalid field name}
+      shift 2
+      ;;
+
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
+    -h|--help)
+      cat << EOF
+Count sorted class labels
+EOF
+      shift
+      exit 0
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+awk_program=$(mktemp "${0##*/}.XXXXX")
+cat << EOF > "$awk_program"
+  1 == NR {
+    idx = \$_$field;
+    cnt = 1;
+    next;
+  }
+
+  (1 < NR) && (idx == \$_$field) {
+    cnt += 1;
+    next;
+  }
+
+  (1 < NR) && (idx != \$_$field) {
+    print idx, cnt;
+
+    // Print empty classes
+    for(jdx = idx + 1; jdx < \$_$field; jdx += 1) {
+      print jdx, 0;
+    }
+
+    idx = \$_$field;
+    cnt = 1;
+    next;
+  }
+
+  END {
+    print idx, cnt;
+  }
+EOF
+
+./xawk -t "$fsep" -H -- -f "$awk_program" \
+  | ./xheader -i "$field""$fsep""$count"
+
+rm "$awk_program"

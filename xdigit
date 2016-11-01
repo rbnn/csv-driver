@@ -1,0 +1,123 @@
+#!/bin/sh
+
+source ./xbase
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o c:f:ht:u -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+while true; do
+  case $1 in
+    -c)
+      # Configure column holding the class labels
+      with_class=${2:?Invalid class name}
+      shift 2
+      ;;
+
+    -f)
+      # Configure column, the data is taken from
+      with_input=${2:?Invalid field name}
+      shift 2
+      ;;
+
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
+    -u)
+      # Allow equality for upper bound
+      lower="<"
+      upper="<="
+      shift
+      ;;
+
+    -h|--help)
+      cat << EOF
+Usage: xdigit [OPT] DATA BINS
+  -c STR    Write class labels into column STR
+  -f STR    Calculate class labels from column STR
+  -t FS     Use FS as field separator
+  -u        Change class limits to \`lo < x <= hi'
+  -h|--help Print this message and terminate
+
+Class limits (BINS)
+  By default are limited by a lower bound (inclusive) and an upper bound
+  (exclusive). This behaviour can be change by the -u flag. Valid classes
+  are numbered from 1 to N, where N is the number of class limits. There
+  are two implicit classes, that contain all elements
+    0:    less than the lowest lower bound
+    N+1:  greater than the highest upper bound.
+
+  The class limits are stored in a plain text file as sequence of bounds
+    L0
+    L1
+    L2
+    ...
+    LN
+  that results in following classes:
+    0:          x < L0
+    1:    L0 <= x < L1
+    2:    L1 <= x < L2
+    ...
+    N+1:  LN <= x
+EOF
+      shift
+      exit 0
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+      
+  esac
+done
+
+# Read input/bin files
+data=${1:?Missing data file}
+shift
+
+bins=${1:?Missing data bins}
+shift
+
+# Create temporary file for awk-program
+awk_program=$(mktemp "${0##*/}".XXXXXX)
+
+# Create awk-program to calculate class labels
+awk -F "$fsep" \
+        ' 1 == NR {
+            cur=$1;
+            min=$1;
+            max=$2;
+            num=1;
+          }
+
+          1 < NR {
+            print "("cur" %lop% $%var%) && ($%var% %hop% "$1") { print "num", $0; next }";
+            min = (min > $1) ? $1 : min;
+            max = (max < $1) ? $1 : max;
+            cur = $1;
+            num += 1;
+          }
+
+          END {
+            print "($%var% %hop% "min") { print 0, $0; next }";
+            print "("max" %lop% $%var%) { print "num", $0; next }";
+          }' "$bins" \
+  | sed -e "s/%var%/_${with_input:-index}/g" \
+  | sed -e "s/%lop%/${lower:-"<="}/g" \
+  | sed -e "s/%hop%/${upper:-"<"}/g" \
+  > "$awk_program"
+
+# Print data file either by name or from stdin. A new column is prepended to
+# contain the class label.
+cat "$data" \
+  | ./xawk -t "$fsep" -- -f "$awk_program" \
+  | ./xheader -t "$fsep" -p "${with_class:-class}"
+
+rm "$awk_program"

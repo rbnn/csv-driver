@@ -102,8 +102,8 @@ if [ ! -z "$replace_header" ]; then
   raw_header=$replace_header
 fi
 
-raw_header="$prepend_header""$raw_header"
-raw_header="$raw_header""$append_header"
+[ ! -z "$prepend_header" ] && raw_header="$prepend_header""$fsep""$raw_header"
+[ ! -z "$append_header" ] && raw_header="$raw_header""$fsep""$append_header"
 
 # Make canonical header
 if [ ! -z "$canonical" ]; then

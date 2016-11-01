@@ -3,7 +3,7 @@
 export enable_stack_trace="yes"
 
 # Default commands
-_awk="/usr/bin/mawk"
+_awk="/usr/bin/awk"
 _cut="/usr/bin/cut -d%fs"
 _echo="/bin/echo"
 _join="/usr/bin/join -t%fs"
