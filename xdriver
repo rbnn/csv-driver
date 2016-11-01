@@ -1,6 +1,6 @@
 #!/bin/sh
 
-source ./xbase
+source xbase
 
 program_name=${0##*/}
 usage_message="Invalid usage! See \`$program_name --help' for help."

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-source ./xbase
+source xbase
 
 # Initialize default field-separator
 fsep=$(set_fsep)

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-source ./xbase
+source xbase
 
 # Initialize default field-separator
 fsep=$(set_fsep)
@@ -117,7 +117,7 @@ awk -F "$fsep" \
 # Print data file either by name or from stdin. A new column is prepended to
 # contain the class label.
 cat "$data" \
-  | ./xawk -t "$fsep" -- -f "$awk_program" \
-  | ./xheader -t "$fsep" -p "${with_class:-class}"
+  | xawk -t "$fsep" -- -f "$awk_program" \
+  | xheader -t "$fsep" -p "${with_class:-class}"
 
 rm "$awk_program"

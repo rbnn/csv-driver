@@ -1,6 +1,6 @@
 #!/bin/sh
 
-source ./xbase
+source xbase
 
 # Initialize default field-separator
 fsep=$(set_fsep)
@@ -77,7 +77,7 @@ cat << EOF > "$awk_program"
   }
 EOF
 
-./xawk -t "$fsep" -H -- -f "$awk_program" \
-  | ./xheader -i "$field""$fsep""$count"
+xawk -t "$fsep" -H -- -f "$awk_program" \
+  | xheader -i "$field""$fsep""$count"
 
 rm "$awk_program"

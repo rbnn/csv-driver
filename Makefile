@@ -1,4 +1,4 @@
-LN=/bin/ln
+LN=/bin/ln -s
 
 all: xawk xdriver xfind xshuf xsort
 

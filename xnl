@@ -1,6 +1,6 @@
 #!/bin/sh
 
-source ./xbase
+source xbase
 
 # Initialize default field-separator
 fsep=$(set_fsep)
@@ -49,7 +49,7 @@ EOF
   esac
 done
 
-./xheader -p $(replace_fsep "${column}%fs" ${fsep}) | \
-if [ -z "$value" ]; then  ./xdriver -t ${fsep} -c "$_nl -w1 -ba"
+xheader -p $(replace_fsep "${column}%fs" ${fsep}) | \
+if [ -z "$value" ]; then  xdriver -t ${fsep} -c "$_nl -w1 -ba"
 else sed -e "2,\$s@^@$value$fsep@"
 fi
