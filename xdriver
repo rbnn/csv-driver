@@ -12,7 +12,7 @@ case $program_name in
     # OFS  --> Set output field separator
     # OFMT --> Configure default float format
     external="$_awk -F %fs -v OFMT=%.8f -v OFS=%fs"
-    format="-v column_%n=%i"
+    format="-v _%n=%i"
     options=-A
     special_mode=1
     ;;

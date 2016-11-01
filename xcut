@@ -73,9 +73,9 @@ for idx in "${x_index[@]}"; do x_column[$idx]=$((idx + 1)); done
 cmd+=" -f "$(join_by x_column[@] ,)
 
 # Prepend header if not in dry-run mode
-[ 0 == ${dry_run:-0} ] && echo $(join_by x_found[@] "$fsep")
+[ 0 -eq ${dry_run:-0} ] && echo $(join_by x_found[@] "$fsep")
 
 # Prefix final command for dry-run
-[ 0 != ${dry_run:-0} ] && cmd="$_echo $cmd"
+[ 0 -ne ${dry_run:-0} ] && cmd="$_echo $cmd"
 
 $cmd

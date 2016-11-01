@@ -1,7 +1,12 @@
 #!/bin/sh
 
+source ./xbase
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o a:dhi:p:r:su -l help -n ${0##*/} -- "$@")
+args=$(getopt -o a:c::dhi:p:r:t:su -l help -n ${0##*/} -- "$@")
 eval set -- "$args"
 
 # Parse arguments
@@ -16,6 +21,12 @@ while true; do
     -p)
       # Prepend to header
       prepend_header=$2
+      shift 2
+      ;;
+
+    -c)
+      # Make canonical header
+      canonical=${2:-_}
       shift 2
       ;;
 
@@ -43,6 +54,12 @@ while true; do
       shift
       ;;
 
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
     -u)
       # Remove repeated headers
       unique_header=1
@@ -56,6 +73,8 @@ while true; do
   -d        Delete header
   -a STR    Append STR to header
   -p STR    Prepend STR to header
+  -c        Canonicalize header (only: a-Z0-9_)
+  -t FS     Field separator
   -s        Skip data
   -u        Remove repeated header definitions
   -h|--help Print this message and terminate
@@ -86,18 +105,24 @@ fi
 raw_header="$prepend_header""$raw_header"
 raw_header="$raw_header""$append_header"
 
+# Make canonical header
+if [ ! -z "$canonical" ]; then
+  # Replace characters other than characters, digits or field-separator
+  raw_header=$(tr -c "[[:alnum:]${fsep}\n]" "${canonical}" <<< "$raw_header")
+fi
+
 # Delete header
-if [ 0 != ${delete_header:-0} ]; then
+if [ 0 -ne ${delete_header:-0} ]; then
   raw_header=""
 fi
 
-if [ 0 == ${delete_header:-0} ]; then
+if [ 0 -eq ${delete_header:-0} ]; then
   echo $raw_header
 fi
 
 # Skip remaining data
-if [ 0 == ${skip_data:-0} ]; then
-  if [ 0 == ${unique_header:-0} ]; then cat
+if [ 0 -eq ${skip_data:-0} ]; then
+  if [ 0 -eq ${unique_header:-0} ]; then cat
   else fgrep -v "$raw_header"
   fi
 fi
