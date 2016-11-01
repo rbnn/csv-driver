@@ -1,0 +1,91 @@
+#!/bin/sh
+
+source xbase
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+declare -a fields
+count=count
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o c:f:ht: -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+while true; do
+  case $1 in
+    -c)
+      # Configure column holding the class counts
+      count=${2:?Invalid count label}
+      shift 2
+      ;;
+
+    -f)
+      # Configure column, the data is taken from
+      cnt=${#fields[@]}
+      fields[$cnt]=${2:?Invalid field name}
+      shift 2
+      ;;
+
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
+    -h|--help)
+      cat << EOF
+Count sorted multi-dimensional class labels
+Example:
+  xdigit -fx - bins -c cx < data | xdigit -fy - bins -c cy | xsort -fcx -fcy | xcountx -fcx -fcx
+EOF
+      shift
+      exit 0
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+[ ${#fields[@]} -lt 2 ] && die -1 "Requires at least two fields!"
+
+# Build conditional by concatening all fields
+declare key
+
+for fn in "${fields[@]}"; do
+  key+="\$_$fn\"$fsep\""
+done
+key=${key%\"$fsep\"*}
+
+awk_program=$(mktemp "${0##*/}.XXXXX")
+cat << EOF > "$awk_program"
+  1 == NR {
+    key = $key;
+    cnt = 1;
+    next;
+  }
+
+  (1 < NR) && (key == $key) {
+    cnt += 1;
+    next;
+  }
+
+  (1 < NR) && (key != $key) {
+    print key, cnt;
+
+    key = $key;
+    cnt = 1;
+    next;
+  }
+
+  END {
+    print key, cnt;
+  }
+EOF
+
+xawk -t "$fsep" -H -- -f "$awk_program" \
+  | xheader -i $(join_by fields[@] "$fsep")"$fsep""$count"
+
+rm "$awk_program"
