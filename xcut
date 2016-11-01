@@ -1,6 +1,5 @@
 #!/bin/sh
 
-export enable_stack_trace="yes"
 source ./xbase
 
 program_name=${0##*/}

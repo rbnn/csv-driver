@@ -1,0 +1,55 @@
+#!/bin/sh
+
+source ./xbase
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+column="index"
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o c:ht:s: -l help -n "$program_name" -- "$@")
+eval set -- "$args"
+
+# Parse arguments
+while true; do
+  case $1 in
+    -c)
+      # Specify field
+      column=${2:?Invalid column name}
+      shift 2
+      ;;
+
+    -s)
+      # Set value
+      value=${2:?Invalid value}
+      shift 2
+      ;;
+
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
+    -h|--help)
+      cat << EOF
+  -c STR    Use STR as index-column
+  -s VAL    Use VAL instead of line number
+  -t FS     Field separator
+  -h|--help Print this message and terminate
+EOF
+      shift
+      exit 0
+      ;;
+ 
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+./xheader -p $(replace_fsep "${column}%fs" ${fsep}) | \
+if [ -z "$value" ]; then  ./xdriver -t ${fsep} -c "$_nl -w1 -ba"
+else sed -e "2,\$s@^@$value$fsep@"
+fi

@@ -1,6 +1,5 @@
 #!/bin/sh
 
-export enable_stack_trace="yes"
 source ./xbase
 
 program_name=${0##*/}
@@ -70,7 +69,7 @@ while true; do
 
     -o)
       # Print warning if overwriting mode-default
-      [ 0 != ${special_mode:-0} ] && warning "Overwriting mode-specific format!"
+      [ 0 -ne ${special_mode:-0} ] && warning "Overwriting mode-specific format!"
 
       format=$2
       shift 2
@@ -78,7 +77,7 @@ while true; do
 
     -c)
       # Print warning if overwriting mode-default
-      [ 0 != ${special_mode:-0} ] && warning "Overwriting mode-specific command!"
+      [ 0 -ne ${special_mode:-0} ] && warning "Overwriting mode-specific command!"
 
       # Run external command on body
       external=${2:?Invalid command}
@@ -166,7 +165,7 @@ IFS= read -r raw_header
 # Parse head line into x_fields and x_flags
 parse_header "$raw_header" "$fsep" x_
 
-if [ 0 == ${select_all:-0} ]; then
+if [ 0 -eq ${select_all:-0} ]; then
   # Find columns in x_fields and store indices into x_index and x_found
   find_fields x_fields[@] x_ ${fields[@]}
 else
@@ -186,12 +185,12 @@ for i in `seq 1 "${#x_index[@]}"`; do
 done
 
 # Optionally prepend(default) or suppress header to output
-[ 0 != ${no_header:-${dry_run:-0}} ] || echo $(join_by x_fields[@] $fsep)
+[ 0 -ne ${no_header:-${dry_run:-0}} ] || echo $(join_by x_fields[@] $fsep)
 
 # Prepend echo-command for dry-run-mode
-[ 0 != ${dry_run:-0} ] && cmd="$_echo "$cmd
+[ 0 -ne ${dry_run:-0} ] && cmd="$_echo ""$cmd"
 
 # Optionally insert header into body (not default)
-if [ 0 == ${exec_header:-0} ]; then cat
+if [ 0 -eq ${exec_header:-0} ]; then cat
 else (echo $(join_by x_fields[@] $fsep) && cat)
 fi | $cmd "$@"

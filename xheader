@@ -1,37 +1,49 @@
 #!/bin/sh
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o dhi:r:su -l delete,help,insert:,replace:,skip,unique -n ${0##*/} -- "$@")
+args=$(getopt -o a:dhi:p:r:su -l help -n ${0##*/} -- "$@")
 eval set -- "$args"
 
 # Parse arguments
 while true; do
   case $1 in
-    -i|--insert)
+    -a)
+      # Append to header
+      append_header=$2
+      shift 2
+      ;;
+
+    -p)
+      # Prepend to header
+      prepend_header=$2
+      shift 2
+      ;;
+
+    -i)
       # Insert new header as first line
       insert_header=$2
       shift 2
       ;;
 
-    -r|--replace)
+    -r)
       # Replace current header
       replace_header=$2
       shift 2
       ;;
 
-    -d|--delete)
+    -d)
       # Delete current header
       delete_header=1
       shift
       ;;
 
-    -s|--skip)
+    -s)
       # Print current header but don't print data
       skip_data=1
       shift
       ;;
 
-    -u|--unique)
+    -u)
       # Remove repeated headers
       unique_header=1
       shift
@@ -39,12 +51,14 @@ while true; do
 
     -h|--help)
       cat << EOF
-  -i|--insert STR   Insert STR as header
-  -r|--replace STR  Replace STR as header
-  -d|--delete       Delete header
-  -s|--skip         Skip data
-  -u|--unique       Remove repeated header definitions
-  -h|--help         Print this message and terminate
+  -i STR    Insert STR as header
+  -r STR    Replace STR as header
+  -d        Delete header
+  -a STR    Append STR to header
+  -p STR    Prepend STR to header
+  -s        Skip data
+  -u        Remove repeated header definitions
+  -h|--help Print this message and terminate
 EOF
       exit 0
       ;;
@@ -57,7 +71,7 @@ EOF
 done
 
 # Insert header
-if [ x"" != x$insert_header ]; then
+if [ ! -z "$insert_header" ]; then
   raw_header=$insert_header
 else
   # Consume exsiting header
@@ -65,9 +79,12 @@ else
 fi
 
 # Replace header
-if [ x"" != x$replace_header ]; then
+if [ ! -z "$replace_header" ]; then
   raw_header=$replace_header
 fi
+
+raw_header="$prepend_header""$raw_header"
+raw_header="$raw_header""$append_header"
 
 # Delete header
 if [ 0 != ${delete_header:-0} ]; then
