@@ -1,0 +1,88 @@
+#!/bin/sh
+
+source xbase
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o ht:x:y: -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+while true; do
+  case $1 in
+    -t)
+      # Change field sepearator (default is comma)
+      fsep=$(set_fsep $2)
+      shift 2
+      ;;
+
+    -x)
+      # Use column for x-data
+      with_x=${2:?Invalid field name}
+      shift 2
+      ;;
+
+    -y)
+      # Use column for y-data
+      with_y=${2:?Invalid field name}
+      shift 2
+      ;;
+
+    -h|--help)
+      cat << EOF
+Calculate pearson r_xy
+EOF
+      shift
+      exit 0
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+      
+  esac
+done
+
+# Read input file
+# If no input file is given, read from stdin
+data=${1:--}
+shift
+
+# Create temporary file for awk-program
+awk_program=$(mktemp "${0##*/}".XXXXXX)
+cat << EOF > "$awk_program"
+BEGIN {
+  n = 0;
+  sum_x = 0.;
+  sum_y = 0.;
+  sum_xy = 0.;
+  sum_xx = 0.;
+  sum_yy = 0.;
+}
+
+{
+  x_i = \$_${with_x:?Missing x data};
+  y_i = \$_${with_y:?Missing y data};
+
+  n += 1;
+  sum_x += x_i;
+  sum_y += y_i;
+  sum_xy += x_i * y_i;
+  sum_xx += x_i ^ 2;
+  sum_yy += y_i ^ 2;
+}
+
+END {
+  num = n * sum_xy - sum_x * sum_y;
+  den = sqrt((n * sum_xx - sum_x ^ 2) * (n * sum_yy - sum_y ^ 2));
+  print num / den;
+}
+EOF
+
+# Print data file either by name or from stdin.
+cat "$data" \
+  | xawk -H -t "$fsep" -- -f "$awk_program"
+
+rm "$awk_program"
