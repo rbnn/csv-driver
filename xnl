@@ -49,7 +49,7 @@ EOF
   esac
 done
 
-xheader -p $(replace_fsep "${column}%fs" ${fsep}) | \
+xheader -p "${column}" | \
 if [ -z "$value" ]; then  xdriver -t ${fsep} -c "$_nl -w1 -ba"
 else sed -e "2,\$s@^@$value$fsep@"
 fi
