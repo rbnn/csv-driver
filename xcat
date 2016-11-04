@@ -2,6 +2,12 @@
 
 source xbase
 
+_cat=$(which cat 2> /dev/null | head -n1)
+_gzip=$(which pigz gzip 2> /dev/null | head -n1)
+_bzip=$(which bzip2 2> /dev/null | head -n1)
+_xz=$(which xz 2> /dev/null | head -n1)
+_lzma=$(which lzma 2> /dev/null | head -n1)
+
 pos=0
 for file in "$@"; do
   pos=$((pos + 1))
@@ -10,7 +16,7 @@ for file in "$@"; do
   [ -z "$file" ] && die -1 "Invalid filename at position $pos!"
 
   # Check if file exists (except `-' for stdin)
-  [ ! "-" = "$file" ] && [ ! -f "$file" ] && die -1 "No such file: $file"
+  [ ! "-" = "$file" ] && [ ! -e "$file" ] && die -1 "No such file: $file"
 
   # Extract fileextension (lower-case)
   filetype=$(tr '[[:upper:]]' '[[:lower:]]' <<< ${file##*.})
@@ -18,23 +24,28 @@ for file in "$@"; do
   # Filetype specific behaviour
   case "$filetype" in
     gz)
-      pigz -cd "$file"
+      [ ! -x "$_gzip" ] && die -1 "No driver for $filetype files!"
+      $_gzip -cd "$file"
       ;;
 
     bz2)
-      bzip2 -cd "$file"
+      [ ! -x "$_bzip" ] && die -1 "No driver for $filetype files!"
+      $_bzip2 -cd "$file"
       ;;
 
     xz)
-      xz -cd "4file"
+      [ ! -x "$_xz" ] && die -1 "No driver for $filetype files!"
+      $_xz -cd "4file"
       ;;
 
     lzma)
-      lzma -cd "$file"
+      [ ! -x "$_lzma" ] && die -1 "No driver for $filetype files!"
+      $_lzma -cd "$file"
       ;;
 
     *)
-      cat "$file"
+      [ ! -x "$_cat" ] && die -1 "No driver for $filetype files!"
+      $_cat "$file"
       ;;
   esac
 done
