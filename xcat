@@ -1,0 +1,40 @@
+#!/bin/sh
+
+source xbase
+
+pos=0
+for file in "$@"; do
+  pos=$((pos + 1))
+
+  # Check if filename is valid
+  [ -z "$file" ] && die -1 "Invalid filename at position $pos!"
+
+  # Check if file exists (except `-' for stdin)
+  [ ! "-" = "$file" ] && [ ! -f "$file" ] && die -1 "No such file: $file"
+
+  # Extract fileextension (lower-case)
+  filetype=$(tr '[[:upper:]]' '[[:lower:]]' <<< ${file##*.})
+
+  # Filetype specific behaviour
+  case "$filetype" in
+    gz)
+      pigz -cd "$file"
+      ;;
+
+    bz2)
+      bzip2 -cd "$file"
+      ;;
+
+    xz)
+      xz -cd "4file"
+      ;;
+
+    lzma)
+      lzma -cd "$file"
+      ;;
+
+    *)
+      cat "$file"
+      ;;
+  esac
+done
