@@ -8,6 +8,7 @@ _cut="/usr/bin/cut -d%fs"
 _echo="/bin/echo"
 _join="/usr/bin/join -t%fs"
 _nl="/usr/bin/nl -s%fs"
+_sed="/bin/sed"
 _shuf="/usr/bin/shuf"
 _sort="/usr/bin/sort --buffer-size=3G"
 

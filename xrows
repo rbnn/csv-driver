@@ -1,0 +1,54 @@
+#!/bin/sh
+
+source xbase
+
+program_name=${0##*/}
+usage_message="Invalid usage! See \`$program_name --help' for help."
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o dhf:t: -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+# Parse arguments
+while true; do
+  case $1 in
+    -d)
+      dry_run=1
+      shift
+      ;;
+      
+    -h|--help)
+      cat << EOF
+  -d      Dry run
+  -f ROW  From row
+  -t ROW  To row
+  -h|--help
+EOF
+      shift
+      exit 0
+      ;;
+
+    -f)
+      from=${2:?Invalid row}
+      shift 2
+      ;;
+
+    -t)
+      # Update field-separator
+      till=${2:?Invalid rows}
+      shift 2
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+cmd="xdriver -c '$_sed -ne ${from:-1},${till:-\$}""p'"
+
+# Prepend echo-command for dry-run-mode
+[ 0 -ne ${dry_run:-0} ] && cmd="$_echo ""$cmd"
+
+eval $cmd

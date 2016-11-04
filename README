@@ -1,0 +1,2 @@
+Select rows by values:
+  xawk -- '1 > $_column'

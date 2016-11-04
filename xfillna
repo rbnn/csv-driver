@@ -1,0 +1,72 @@
+#!/bin/sh
+
+# source xbase
+
+program_name=${0##*/}
+usage_message="Invalid usage! See \`$program_name --help' for help."
+
+# Parse command line arguments and feed parsed arguments
+args=$(getopt -o dhf:p:v: -l help -n ${0##*/} -- "$@")
+eval set -- "$args"
+
+pattern="nan"
+value=0
+
+# Parse arguments
+while true; do
+  case $1 in
+    -d)
+      dry_run=1
+      shift
+      ;;
+      
+    -h|--help)
+      cat << EOF
+  -d      Dry run
+  -f STR  Field name
+  -p STR  Pattern for empty fields
+  -v VAL  Replace NaNs by VAL
+  -h|--help
+EOF
+      shift
+      exit 0
+      ;;
+
+    -f)
+      field=${2:?Invalid field name}
+      shift 2
+      ;;
+
+    -p)
+      # Update empty-pattern
+      pattern=${2}
+      shift 2
+      ;;
+
+    -v)
+      # Replace-value
+      value=${2}
+      shift 2
+      ;;
+
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+tmp_program=$(mktemp xfillna.XXXXXX)
+cat << EOF > "$tmp_program"
+{
+  if("$pattern" == \$_$field) {
+    \$_$field = "$value";
+  }
+
+  print \$0;
+}
+EOF
+
+xawk -- -f "$tmp_program"
+
+rm "$tmp_program"
