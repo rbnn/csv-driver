@@ -6,20 +6,30 @@ source xbase
 fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o c:f:ht:u -l help -n ${0##*/} -- "$@")
+args=$(getopt -o b:c:f:ht:u -l help -n ${0##*/} -- "$@")
 eval set -- "$args"
+
+default_class="class"
+default_input="value"
+default_bin="value"
 
 while true; do
   case $1 in
+    -b)
+      # Read binning limits from this column
+      bin_field=${2:?Invalid bin field}
+      shift 2
+      ;;
+
     -c)
-      # Configure column holding the class labels
-      with_class=${2:?Invalid class name}
+      # Write class labels into this column
+      class_field=${2:?Invalid class field}
       shift 2
       ;;
 
     -f)
-      # Configure column, the data is taken from
-      with_input=${2:?Invalid field name}
+      # Read input data from this column
+      input_field=${2:?Invalid input field}
       shift 2
       ;;
 
@@ -31,16 +41,17 @@ while true; do
 
     -u)
       # Allow equality for upper bound
-      lower="<"
-      upper="<="
+      operator_lower="<"
+      operator_upper="<="
       shift
       ;;
 
     -h|--help)
       cat << EOF
 Usage: xdigit [OPT] DATA BINS
-  -c STR    Write class labels into column STR
-  -f STR    Calculate class labels from column STR
+  -b BIN    Use column BIN of BINS-file as binning limits (default: $default_bin)
+  -c CLS    Write class labels into column CLS (default: $default_class)
+  -f INP    Calculate class labels for column INP of DATA-file (default: $default_input)
   -t FS     Use FS as field separator
   -u        Change class limits to \`lo < x <= hi'
   -h|--help Print this message and terminate
@@ -87,37 +98,46 @@ shift
 
 # Create temporary file for awk-program
 awk_program=$(mktemp "${0##*/}".XXXXXX)
+awk_meta=$(mktemp "${0##*/}".XXXXXX)
 
-# Create awk-program to calculate class labels
-awk -F "$fsep" \
-        ' 1 == NR {
-            cur=$1;
-            min=$1;
-            max=$2;
-            num=1;
-          }
+class=${class_field:-$default_class}
+limit=${bin_field:-$default_bin}
+lower=${operator_lower:-"<="}
+upper=${operator_upper:-"<"}
 
-          1 < NR {
-            print "("cur" %lop% $%var%) && ($%var% %hop% "$1") { print "num", $0; next }";
-            min = (min > $1) ? $1 : min;
-            max = (max < $1) ? $1 : max;
-            cur = $1;
-            num += 1;
-          }
 
-          END {
-            print "($%var% %hop% "min") { print 0, $0; next }";
-            print "("max" %lop% $%var%) { print "num", $0; next }";
-          }' "$bins" \
-  | sed -e "s/%var%/_${with_input:-index}/g" \
-  | sed -e "s/%lop%/${lower:-"<="}/g" \
-  | sed -e "s/%hop%/${upper:-"<"}/g" \
+cat > "$awk_meta" << EOF
+1 == NR {
+  cur_limit=\$_$limit;
+  min_limit=\$_$limit;
+  max_limit=\$_$limit;
+  cur_class=1;
+}
+
+1 < NR {
+  print "("cur_limit" $lower %input%) && (%input% $upper "\$_$limit") { print "cur_class", \$0; next }";
+  min_limit = (min_limit > \$_$limit) ? \$_$limit : min_limit;
+  max_limit = (max_limit < \$_$limit) ? \$_$limit : max_limit;
+  cur_limit = \$_$limit;
+  cur_class += 1;
+}
+
+END {
+  print "(%input% $upper "min_limit") { print 0, \$0; next }";
+  print "("max_limit" $lower %input%) { print "cur_class", \$0; next }";
+}
+EOF
+
+xcat "$bins" \
+  | xawk -H -t "$fsep" -- -f "$awk_meta" \
+  | sed -e "s/%input%/\$_${input_field:-$default_input}/g" \
   > "$awk_program"
 
 # Print data file either by name or from stdin. A new column is prepended to
 # contain the class label.
 cat "$data" \
   | xawk -t "$fsep" -- -f "$awk_program" \
-  | xheader -t "$fsep" -p "${with_class:-class}"
+  | xheader -t "$fsep" -p "$class"
 
 rm "$awk_program"
+rm "$awk_meta"

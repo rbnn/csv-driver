@@ -1,0 +1,43 @@
+#!/bin/sh
+
+source xbase
+
+_cat=$(which cat 2> /dev/null | head -n1)
+_gzip=$(which pigz gzip 2> /dev/null | head -n1)
+_bzip=$(which bzip2 2> /dev/null | head -n1)
+_xz=$(which xz 2> /dev/null | head -n1)
+_lzma=$(which lzma 2> /dev/null | head -n1)
+
+# Check if filename is valid
+file=${1:?Invalid filename}
+
+# Extract fileextension (lower-case)
+filetype=$(tr '[[:upper:]]' '[[:lower:]]' <<< ${file##*.})
+
+# Filetype specific behaviour
+case "$filetype" in
+  gz)
+    [ ! -x "$_gzip" ] && die -1 "No driver for $filetype files!"
+    $_gzip -c > "$file"
+    ;;
+
+  bz2)
+    [ ! -x "$_bzip" ] && die -1 "No driver for $filetype files!"
+    $_bzip2 -c > "$file"
+    ;;
+
+  xz)
+    [ ! -x "$_xz" ] && die -1 "No driver for $filetype files!"
+    $_xz -c > "$file"
+    ;;
+
+  lzma)
+    [ ! -x "$_lzma" ] && die -1 "No driver for $filetype files!"
+    $_lzma -c > "$file"
+    ;;
+
+  *)
+    [ ! -x "$_cat" ] && die -1 "No driver for $filetype files!"
+    $_cat > "$file"
+    ;;
+esac

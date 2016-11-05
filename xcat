@@ -35,7 +35,7 @@ for file in "$@"; do
 
     xz)
       [ ! -x "$_xz" ] && die -1 "No driver for $filetype files!"
-      $_xz -cd "4file"
+      $_xz -cd "$file"
       ;;
 
     lzma)
