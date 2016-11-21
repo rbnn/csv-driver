@@ -158,12 +158,12 @@ function replace_fsep()
 # Join elements of ARRAY into a single line. Subsequent elements will be
 # separated by FS.
 #
-# Usage: join_by ARRAY [FS]
+# Usage: join_by [ARRAY [FS]]
 function join_by()
 {
   #{{{
   # Read header names as first argument
-  declare -ra x=("${!1:?Missing array}")
+  declare -ra x=(${!1})
 
   # Read (optional) field-separator
   # Default field-separator is comma `,'

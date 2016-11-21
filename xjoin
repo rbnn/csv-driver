@@ -24,9 +24,10 @@ trap clean_up 0 # EXIT-signal
 source xbase
 
 declare -r program_name=${0##*/}
-declare -r default_xjoin_flags=--check-order
 declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
 declare -r join_backend=$(find_program_like ${join_like_programs[@]})
+declare -r default_xjoin_no_check_order=no
+declare -r default_xjoin_flags=
 declare -a temporary_files
 
 # Initialize default field-separator
@@ -34,7 +35,7 @@ fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
 declare -r args=$(${getopt_backend} --options=1:2:dhj:t: \
-  --longoptions=help,left-prefix:,left-suffix:,right-prefix:,right-suffix: \
+  --longoptions=help,left-prefix:,left-suffix:,right-prefix:,right-suffix:,nocheck-order \
   --name="${program_name}" -- "$@")
 eval set -- "${args}"
 
@@ -87,6 +88,11 @@ while true; do
     shift 2
     ;;
 
+  --nocheck-order) # Force disable check order
+    no_check_order=yes
+    shift
+    ;;
+
   -h|--help)  # Print help message
     cat << EOF
 Usage: ${program_name} [OPT] LEFT RIGHT [-- ...]
@@ -109,6 +115,9 @@ Available flags for OPT:
   --right-prefix=STR, --right-suffix=STR
     Add STD as prefix/suffix to LEFT/RIGHT column names
 
+  --nocheck-order
+    Do not check that the input is correctly sorted
+
   -h, --help
     $(help_help_message)
 
@@ -128,9 +137,12 @@ EOF
 done
 
 # Non-option arguments are input files
-declare -r left_file=${1:?Missing LEFT}
-declare -r right_file=${2:?Missing RIGHT}
+declare -r left_file=${1}
+declare -r right_file=${2}
 shift 2
+
+[ -z "${left_file}" ] && die -1 "Missing LEFT!"
+[ -z "${right_file}" ] && die -1 "Missing RIGHT!"
 
 # Check for double/invalid usage of `-'
 if [ "-" == "${left_file}" ] && [ "-" == "${right_file}" ]; then
@@ -146,18 +158,32 @@ declare -r tmpdir=$(mktemp -d)
 #
 # Use xcat to transparently decompress LEFT input into fifo. Afterwards this
 # fifo is connected to fd 4.
-declare -r left_in="${tmpdir}/left_in"
-mkfifo "${left_in}" || die -1 "Cannot create fifo \`${left_in}'!"
-temporary_files+=("${left_in}")
-xcat "${left_file}" > "${left_in}" &
-exec 4< "${left_in}"
+if [ "-" != "${left_file}" ]; then
+  declare -r left_in="${tmpdir}/left_in"
+  mkfifo "${left_in}" || die -1 "Cannot create fifo \`${left_in}'!"
+  temporary_files+=("${left_in}")
+
+  xcat "${left_file}" > "${left_in}" &
+  exec 4< "${left_in}" || die -1 "Cannot map \`${left_file}' to fd 4!"
+
+else
+  # LEFT is connected to stdin. Therefor fd 0 will be connected to fd 4.
+  exec 4<&0 || die -1 "Cannot map stdin to fd 4!"
+fi
 
 # Open right file as file descriptor(fd) 5: See above
-declare -r right_in="${tmpdir}/right_in"
-mkfifo "${right_in}" || die -1 "Cannot create fifo \`${right_in}'!"
-temporary_files+=("${right_in}")
-xcat "${right_file}" > "${right_in}" &
-exec 5< "${right_in}"
+if [ "-" != "${right_file}" ]; then
+  declare -r right_in="${tmpdir}/right_in"
+  mkfifo "${right_in}" || die -1 "Cannot create fifo \`${right_in}'!"
+  temporary_files+=("${right_in}")
+
+  xcat "${right_file}" > "${right_in}" &
+  exec 5< "${right_in}" || die -1 "Cannot map \`${right_file}' to fd 5!"
+
+else
+  # RIGHT is connected to stdin. Therefor fd 0 will be connected to fd 5.
+  exec 5<&0 || die -1 "Cannot map stdin to fd 5!"
+fi
 
 # Read headers from LEFT and RIGHT input
 IFS= read -r left_raw_header <&4
@@ -183,13 +209,9 @@ locate_fields x_right_fields[@] x_right_ "${right_field}"
 # 1. Delete left/right join fields
 # 2. Prepend left join field to the output
 if [ 0 -eq ${dry_run:-0} ]; then
-  join_field=${x_left_fields[${x_left_index[0]}]}
-  delete_fields_by_index x_left_fields[@] x_left_index[@] x_left_
   delete_fields_by_index x_right_fields[@] x_right_index[@] x_right_
-
-  tmp_left_header=$(join_by x_left_fields[@] "${fsep}")
-  tmp_right_header=$(join_by x_right_fields[@] "${fsep}")
-  echo "${join_field}${fsep}${tmp_left_header}${fsep}${tmp_right_header}"
+  full_header=(${x_left_fields[@]} ${x_right_fields[@]})
+  echo "$(join_by full_header[@] ${fsep})"
 fi
 
 # Create temporary files for join-program
@@ -203,6 +225,9 @@ mkfifo "${right_fifo}" || die -1 "Cannot create fifo \`${right_fifo}'!"
 temporary_files+=("${right_fifo}")
 
 # Connect file descriptors to fifos
+#
+# Write data from LEFT/RIGHT into fifo, that will be passed as files to the
+# join-backend.
 cat <&4 > "${left_fifo}" &
 cat <&5 > "${right_fifo}" &
 
@@ -216,6 +241,12 @@ cmd+=" -1${left_no} -2${right_no}"
 
 # Pass input data via fifos
 cmd+=" '${left_fifo}' '${right_fifo}'"
+
+# Apply (no-)check-order flag
+if [ "yes" == "${no_check_order:-${default_xjoin_no_check_order}}" ]; then
+  cmd+=" --nocheck-order"
+else cmd+=" --check-order"
+fi
 
 # Add non-option arguments and other options
 cmd+=" $@ ${XJOIN_FLAGS:-${default_xjoin_flags}}"
