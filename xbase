@@ -12,6 +12,8 @@
 # sed (required)
 # util-linux  (optional)
 
+export enable_debug=no
+export enable_debug_location=yes
 export enable_call_stack=yes
 export enable_warning_location=yes
 declare -r default_field_separator=,
@@ -34,11 +36,24 @@ declare -ar parallel_like_programs=("parallel")
 declare -ar sed_like_programs=("sed")
 declare -ar split_like_programs=("split")
 declare -ar sort_like_programs=("sort")
-_cut="/usr/bin/cut -d%fs"
-_echo="/bin/echo"
-_nl="/usr/bin/nl -s%fs"
-_shuf="/usr/bin/shuf"
-_sort="/usr/bin/sort ${SFLAGS:---buffer-size=3G}"
+
+# Write debugging MESSAGE to stderr
+#
+# Usage: debug MESSAGE...
+function debug()
+{
+  #{{{
+  # Skip all execution when debug is off
+  [ "yes" != "${enable_debug}" ] && return
+
+  case "${enable_debug_location:-no}" in
+  yes) declare -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
+  *) declare -r location="" ;;
+  esac
+
+  echo "${location}Debug: $@" >&2
+  #}}}
+}
 
 # Write MESSAGE to stderr
 #
@@ -47,12 +62,8 @@ function warning()
 {
   #{{{
   case "${enable_warning_location:-no}" in
-  yes)
-    declare -r location="$(caller 0 | awk '{print $3":"$1;}'): "
-    ;;
-  *)
-    declare -r location=""
-    ;;
+  yes) declare -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
+  *) declare -r location="" ;;
   esac
 
   echo "${location}Warning: $@" >&2
