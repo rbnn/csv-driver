@@ -1,50 +1,141 @@
-#!/bin/sh
+#!/bin/bash
 
-export enable_stack_trace="yes"
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xbase
+# License:  GPL-3.0
+
+# Dependencies:
+# bash (required)
+# coreutils (required)
+# grep (required)
+# sed (required)
+# util-linux  (optional)
+
+export enable_call_stack=yes
+export enable_warning_location=yes
+declare -r default_field_separator=,
+
+# Register process ID of top-level shell. This is required to allow the
+# die-function to globally abort the current program. Otherwise only the
+# sub-shell would be terminated.
+# Source: http://stackoverflow.com/a/9894126
+declare -r top_level_pid=$$
 
 # Default commands
-_awk="/usr/bin/mawk"
+declare -ar awk_like_programs=("mawk" "awk")
+declare -ar cut_like_programs=("cut")
+declare -ar egrep_like_programs=("egrep")
+declare -ar fgrep_like_programs=("fgrep")
+declare -ar getopt_like_programs=("getopt")
+declare -ar join_like_programs=("join")
+declare -ar nl_like_programs=("nl")
+declare -ar parallel_like_programs=("parallel")
+declare -ar sed_like_programs=("sed")
+declare -ar split_like_programs=("split")
+declare -ar sort_like_programs=("sort")
 _cut="/usr/bin/cut -d%fs"
 _echo="/bin/echo"
-_join="/usr/bin/join -t%fs"
 _nl="/usr/bin/nl -s%fs"
-_sed="/bin/sed"
 _shuf="/usr/bin/shuf"
-_sort="/usr/bin/sort --buffer-size=3G"
+_sort="/usr/bin/sort ${SFLAGS:---buffer-size=3G}"
 
+# Write MESSAGE to stderr
+#
+# Usage: warning MESSAGE...
 function warning()
 {
-  echo "Warning: $@" >&2
+  #{{{
+  case "${enable_warning_location:-no}" in
+  yes)
+    declare -r location="$(caller 0 | awk '{print $3":"$1;}'): "
+    ;;
+  *)
+    declare -r location=""
+    ;;
+  esac
+
+  echo "${location}Warning: $@" >&2
+  #}}}
 }
 
+# Abort execution with error CODE after printing an error MESSAGE to stderr and
+# the content of the call-stack(optionally). The output of the call-stack can
+# be enabled by setting `enable_call_stack' to `yes'. This will only be
+# ignored, if the column-program from util-linux package isn't installed.
+# 
+# Usage: die CODE MESSAGE...
 function die()
 {
-  return_code=$1
+  #{{{
+  return_code=${1:?Missing CODE}
   shift
 
-  if [ x"yes" = x${enable_stack_trace:-no} ]; then
-    local frame=0
+  # Suppress printing call-stack, if column program (linux-utils) isn't found
+  if [ "yes" = "${enable_call_stack:-no}" ] && [ -x "$(which column)" ]; then
     echo "Call stack:" >&2
-    while caller $frame; do
-      # Read next frame
-      frame=$((frame + 1));
-    done >&2
+
+    # Print all frame on call-stack to stderr
+    local frame=0
+    while caller $frame; do ((frame += 1)); done \
+      | (printf "frame\tline\tfunction\tfile\n"; nl) \
+      | column --table \
+      | sed -e 's/^/  /' >&2
   fi
 
   echo "Error: $@" >&2
+
+  # Source: http://stackoverflow.com/a/9894126
+  kill -s TERM ${top_level_pid}
   exit $return_code
+  #}}}
 }
 
+# Usage: set_fsep [FS]
 function set_fsep()
 {
-  # Read (optional) field-separator
-  # Default is comma
-  declare -r fsep=${1:-,}
-  shift
+  #{{{
+  declare -r fsep=${1:-${default_field_separator}}
+  grep '@' <<< "${fsep}" && die -1 "Field separator must not contain \`@'!"
+  echo "${fsep}"
+  #}}}
+}
 
-  grep '@' <<< "$fsep" && die -1 "Field separator must not contain \`@'!"
+# Generate a common help message for configuring the field separator from input
+# ARG. This is generally done by the flag `-t ARG'
+#
+# Usage: fsep_help_message [ARG]
+function fsep_help_message()
+{
+  echo "Use ${1:-FS} instead of COMMA for field delimiter"
+}
 
-  echo $fsep
+# Generate a common help message for the flags to request help. Generally these
+# are -h or --help.
+#
+# Usage: help_help_message
+function help_help_message()
+{
+  echo "Print this message and terminate"
+}
+
+# Usage: getopt_help_message PROGRAM BACKEND VARIABLE [DEFAULT_FLAGS]
+function getopt_help_message()
+{
+  local -r program=${1:?Missing PROGRAM}
+  local -r backend=${2:?Missing BACKEND}
+  local -r variable=${3:?Missing VARIABLE}
+  local -r getopt=$(find_program_like ${getopt_like_programs})
+
+  cat << EOF
+As ${program} is a frontend to ${backend}, two methods
+are implemented to pass extra options to the underlying backend:
+1.  ${getopt} is used to parse commandline options. It stops parsing options on
+    \`--' and takes all input thereafter as non-option arguments. These
+    non-option arguments are passed directly to the backend
+2.  By defining the environment variable \`${variable}' options can be passed
+    to the backend (default is \`${4}').
+EOF
 }
 
 function replace_fsep()
@@ -60,66 +151,74 @@ function replace_fsep()
   # Read (optional) pattern for field-separator
   # Default pattern is `%fs'
   declare -r var=${1:-%fs}
-  shift
 
   sed "s@$var@$sep@g" <<< "$cmd"
 }
 
+# Join elements of ARRAY into a single line. Subsequent elements will be
+# separated by FS.
+#
+# Usage: join_by ARRAY [FS]
 function join_by()
 {
+  #{{{
   # Read header names as first argument
   declare -ra x=("${!1:?Missing array}")
-  shift
 
   # Read (optional) field-separator
   # Default field-separator is comma `,'
-  local IFS=${1:-,}
-  shift
-
+  local IFS=${2:-,}
   echo "${x[*]}"
+  #}}}
 }
 
+# Parse column names from STR. Therefore STR must be a single line and it is
+# split on FS and the column names are saved in the array <PREFIX>fields. PREFIX
+# is an optional argument and default to an empty string.
+#
+# Usage: parse_header STR FS [PREFIX]
 function parse_header()
 {
-  # Line containing header
-  declare -r header=${1:?Missing header}
-  shift
-
-  declare -r fsep=${1:?Missing field separator}
-  shift
-
-  # Variable name prefix
-  declare -r prefix=${1:-""}
-  shift
-
-  local IFS="$fsep"
+  #{{{
   declare -a fields
-  declare -a columns
+  # declare -a columns
 
-  read -r -a columns <<< "$header"
+  local IFS=${2:?Missing FS}
+  read -r -a fields <<< "${1:?Missing STR}"
 
-  for fn in "${columns[@]}"; do
-    # Save current field name and options
-    declare -i cnt=$((${#fields[@]} + 1))
-    fields[$cnt]=${fn:?Empty field name}
+  # Check for non-empty column names
+  declare -i no=1
+  for fn in "${fields[@]}"; do
+    [ -z "${fn}" ] && die -1 "Field name ${no} must not be empty!"
+    ((no + 1))
   done
 
   # Export arrays with prefix as global variables
-  eval "$prefix""fields"='("${fields[@]}")'
+  eval "${3}fields"='("${fields[@]}")'
+  #}}}
 }
 
-function find_fields()
+# Locate fields within ARRAY by their column name. A field specifier may
+# additionally contain sort(1) flags. These flags are appended to the column
+# name, thus FIELD is `NAME[:FLAGS]'. According to the manpage of sort(1),
+# amongst others FLAGS may contain `g' for sorting by generic numbers. The
+# function will define the arrays <PREFIX>index, <PREFIX>flags and
+# <PREFIX>found. The first two arrays store the column number and sort flags of
+# the FIELDs by their order passed to the function. The third array contains
+# the column names of the FIELDs sorted by their column number. The function
+# will fail with an error message if at least one FIELD could not be found in
+# the header.
+#
+# Usage: locate_fields ARRAY PREFIX FIELD...
+function locate_fields()
 {
-  # Read header names as first argument
-  declare -ra header=(${!1:?Missing header})
-  shift
-
-  # Read prefix
-  declare -r prefix=${1?Missing prefix}
-  shift
+  #{{{
+  # Read header names and prefix
+  declare -ra header=(${!1:?Missing ARRAY})
+  declare -r prefix=${2:?Missing PREFIX}
+  shift 2
 
   declare -a index
-  declare -a found
   declare -a flags
 
   for fn in "$@"; do
@@ -127,16 +226,17 @@ function find_fields()
     declare -i fn_idx=-1
     declare -i hn_idx=0
 
-    # Check for non-empty field name
-    _N=${fn:?Empty field name}
-    _N=${_N%%:*}
+    # Strip sort flags from field name
+    [ -z "${fn}" ] && die -1 "Empty field name!"
+    _N=${fn%%:*}
 
     # Keep suffix from field name, i.e. from next character on after `:'
     _O=${fn:$((${#_N} + 1))}
 
+    # Search for _N in column names
     for hn in "${header[@]}"; do
-      if [ "$hn" = "$_N" ]; then
-        fn_idx=$hn_idx
+      if [ "${hn}" = "${_N}" ]; then
+        fn_idx=${hn_idx}
         break
       fi
 
@@ -144,149 +244,103 @@ function find_fields()
     done
 
     # Raise error, if field could not be found
-    [ -1 -eq $fn_idx ] && die -1 "No such field: $fn"
+    [ -1 -eq ${fn_idx} ] && die -1 "No such field: ${_N}"
 
-    declare -i cnt=${#index[@]}
-    index[$cnt]=$fn_idx
-    flags[$cnt]=$_O
+    index+=("${fn_idx}")
+    flags+=("${_O}")
   done
 
   # Sort selected fields by column-number
   declare -i idx
   declare -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
 
-  for idx in "${sorted_index[@]}"; do
-    declare -i cnt=${#found[@]}
-    found[$cnt]=${header[$idx]}
-  done
+  declare -a found
+  for idx in "${sorted_index[@]}"; do found+=("${header[${idx}]}"); done
 
   # Export arrays with prefix as global variables
-  eval "$prefix""index"='("${index[@]}")'
-  eval "$prefix""found"='("${found[@]}")'
-  eval "$prefix""flags"='("${flags[@]}")'
+  eval "${prefix}index"='("${index[@]}")'
+  eval "${prefix}found"='("${found[@]}")'
+  eval "${prefix}flags"='("${flags[@]}")'
+  #}}}
 }
 
+# This function returns the arrays <PREFIX>index, <PREFIX>flags and
+# <PREFIX>found for all available fields. This has the same effect as it would,
+# when passing all available fields to the locate_fields-function. The sort(1)
+# FLAGS are applied to all fields (default is `g').
+#
+# Usage: select_all_fields ARRAY PREFIX [FLAGS]
 function select_all_fields()
 {
-  # Read header names as first argument
-  declare -ra header=(${!1:?Missing header})
-  shift
-
-  # Read prefix
-  declare -r prefix=${1?Missing prefix}
-  shift
+  #{{{
+  declare -ra header=(${!1:?Missing ARRAY})
+  declare -r prefix=${2?Missing PREFIX}
 
   declare -a index
-  declare -a found
   declare -a flags
+  declare -a found
 
   for fn in "${header[@]}"; do
-
-    declare -i fn_idx=-1
-    declare -i hn_idx=0
-
-    # Check for non-empty field name
-    _N=${fn:?Empty field name}
-    _N=${_N%%:*}
-
-    # Keep suffix from field name, i.e. from next character on after `:'
-    _O=${fn:$((${#_N} + 1))}
-
-    for hn in "${header[@]}"; do
-      if [ "$hn" = "$_N" ]; then
-        fn_idx=$hn_idx
-        break
-      fi
-
-      hn_idx=$((hn_idx + 1))
-    done
-
-    # Raise error, if field could not be found
-    [ -1 -eq $fn_idx ] && die -1 "No such field: $fn"
-
-    declare -i cnt=${#index[@]}
-    index[$cnt]=$fn_idx
-    flags[$cnt]=$_O
-  done
-
-  # Sort selected fields by column-number
-  declare -i idx
-  declare -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
-
-  for idx in "${sorted_index[@]}"; do
-    declare -i cnt=${#found[@]}
-    found[$cnt]=${header[$idx]}
+    index+=("${#index[@]}")
+    flags+=("${3:-g}")
+    found+=("${fn}")
   done
 
   # Export arrays with prefix as global variables
-  eval "$prefix""index"='("${index[@]}")'
-  eval "$prefix""found"='("${found[@]}")'
-  eval "$prefix""flags"='("${flags[@]}")'
+  eval "${prefix}index"='("${index[@]}")'
+  eval "${prefix}found"='("${found[@]}")'
+  eval "${prefix}flags"='("${flags[@]}")'
+  #}}}
 }
 
+# Prepend STR to all elements of ARRAY. The result will be stored in
+# <PREFIX>fields. PREFIX is an optional argument and defaults to an empty
+# string.
+#
+# Usage: add_prefix_to_fields ARRAY STR [PREFIX] 
 function add_prefix_to_fields()
 {
-  # Read header names as first argument
-  declare -ra header=(${!1:?Missing header})
-  shift
-
-  # Read prefix as second argument
-  declare -r prefix=(${1:?Missing prefix})
-  shift
-
-  # Read variable-prefix as third argument
-  declare -r var_prefix=(${1:?Missing prefix for variable name})
-  shift
+  #{{{
+  declare -ra header=(${!1:?Missing ARRAY})
+  declare -r str=${2:?Missing STR}
 
   declare -a fields
-
-  for fn in ${header[@]}; do
-    cnt=${#fields[@]}
-    fields[$cnt]="$prefix""$fn"
-  done
+  for fn in ${header[@]}; do fields+=("${str}${fn}"); done
 
   # Export arrays with prefix as global variables
-  eval "$var_prefix""fields"='("${fields[@]}")'
+  eval "${3}fields"='("${fields[@]}")'
+  #}}}
 }
 
+# Append STR to all elements of ARRAY. The result will be stored in
+# <PREFIX>fields. PREFIX is an optional argument and defaults to an empty
+# string.
+#
+# Usage: add_suffix_to_fields ARRAY STR [PREFIX] 
 function add_suffix_to_fields()
 {
-  # Read header names as first argument
-  declare -ra header=(${!1:?Missing header})
-  shift
-
-  # Read suffix as second argument
-  declare -r suffix=(${1:?Missing suffix})
-  shift
-
-  # Read variable-prefix as third argument
-  declare -r var_prefix=(${1:?Missing prefix for variable name})
-  shift
+  #{{{
+  declare -ra header=(${!1:?Missing ARRAY})
+  declare -r str=${2:?Missing STR}
 
   declare -a fields
-
-  for fn in ${header[@]}; do
-    cnt=${#fields[@]}
-    fields[$cnt]="$fn""$suffix"
-  done
+  for fn in ${header[@]}; do fields+=("${fn}${str}"); done
 
   # Export arrays with prefix as global variables
-  eval "$var_prefix""fields"='("${fields[@]}")'
+  eval "${3}fields"='("${fields[@]}")'
+  #}}}
 }
 
+# Delete elements pointed to by INDEX from ARRAY. The result will be stored in
+# <PREFIX>fields. PREFIX is an optional argument and defaults to an empty
+# string.
+#
+# Usage: delete_fields_by_index FIELD INDEX [PREFIX]
 function delete_fields_by_index()
 {
-  # Read header names as first argument
-  declare -ra header=(${!1:?Missing header})
-  shift
-
-  # Read header names as first argument
-  declare -ra select=(${!1:?Missing selection})
-  shift
-
-  # Read variable-prefix as third argument
-  declare -r var_prefix=(${1:?Missing prefix for variable name})
-  shift
+  #{{{
+  declare -ra header=(${!1:?Missing ARRAY})
+  declare -ra select=(${!2:?Missing INDEX})
 
   declare -a fields
   declare -i idx=0
@@ -295,20 +349,44 @@ function delete_fields_by_index()
     declare -i found=0
 
     for jdx in ${select[@]}; do
-      if [ $idx -eq $jdx ]; then
+      if [ ${idx} -eq ${jdx} ]; then
         found=1
         break
       fi
     done
 
     # Only keep column, that wasn't found in selection
-    [ 0 -eq $found ] && fields[${#fields[@]}]=$fn
+    [ 0 -eq ${found} ] && fields+=("${fn}")
 
-    idx=$((idx + 1))
+    ((idx += 1))
   done
 
   # Export arrays with prefix as global variables
-  eval "$var_prefix""fields"='("${fields[@]}")'
+  eval "${3}fields"='("${fields[@]}")'
+  #}}}
+}
+
+# Find any program from the given LIST. The idea is to specify a list of
+# similar programs and allow any of them to fullfill the requirement. The
+# function will return the path to the first element that is found by the order
+# of the LIST. If no program is found, the function will die with an error
+# message.
+#
+# Usage: find_program_like LIST...
+function find_program_like()
+{
+  #{{{
+  for pn in "$@"; do
+    path=$(which ${pn} 2> /dev/null)
+
+    if [ -x "${path}" ]; then
+      echo "${path}"
+      return
+    fi
+  done
+
+  die -1 "Could not find any of: $@"
+  #}}}
 }
 
 # function merge_fields()

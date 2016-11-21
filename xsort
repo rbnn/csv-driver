@@ -1,0 +1,208 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xsort
+# License:  GPL-3.0
+
+function clean_up()
+{
+  #{{{
+  # Run commands stored in temporary_stack in reverse order
+  local clean_cmd
+  printf "%s\n" "${temporary_stack[@]}" \
+    | tac \
+    | while read clean_cmd; do eval "${clean_cmd}"; done
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
+
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r default_xsort_flags="--buffer-size=3G"
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r sort_backend=$(find_program_like ${sort_like_programs[@]})
+declare -a temporary_stack
+declare -a merge_files
+declare -a sort_files
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(${getopt_backend} --options=dhf:t: \
+  --longoptions=help,merge: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
+
+  -f) # Sort key
+    IFS=, read -r -a tmp_fields <<< "${2}"
+    fields=(${fields[@]} ${tmp_fields[@]})
+    shift 2
+    ;;
+
+  -t) # Field separator
+    fsep=$(set_fsep ${2})
+    shift 2
+    ;;
+
+  --merge) # Merge files
+    IFS=, read -r -a tmp_merge <<< "${2}"
+    merge_files=(${merge_files[@]} ${tmp_merge[@]})
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT] [-- ...]
+
+Sort input from standard input by a set of sort keys.
+
+Available flags for OPT:
+  -d
+    Enable dry-run mode. The backend will not be invoked, but the configured
+    command will be written to standard output.
+
+  -f FIELDS
+    Sort data by FIELDS. FIELDS might either be a single pair of a
+    <FIELD_NAME>:<SORT_FLAGS> or a comma separated list of pairs. For more
+    information about SORT_FLAGS see documentation of ${sort_backend}.
+
+  -t FS
+    $(fsep_help_message)
+
+  --merge=FILES
+    Merge already sorted FILES. Do not sort.
+
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" "${sort_backend}" XSORT_FLAGS "${default_xsort_flags}")
+
+Backend: ${sort_backend}
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+# The function will split the DATA-file into the HEAD-line and the BODY-lines.
+# Therefore the funcion expects DATA to be a filename. HEAD and BODY have to be
+# fifos. Because the function writes into fifos it has to be run as background
+# job. HEAD will only contain a single line, i.e. the head-line.
+#
+# Usage: strip_header DATA HEAD BODY
+function strip_header()
+{
+  xcat "${1:?Missing DATA}" \
+    | {
+        xheader --only > "${2:?Missing HEAD}"
+        cat > "${3:?Missing BODY}"
+      }
+}
+
+if [ 0 -eq ${#merge_files[@]} ]; then
+  # Read first row and keep stdin open
+  IFS= read -r raw_header
+
+else
+  declare -r tmpdir=$(mktemp -d)
+  temporary_stack+=("rmdir '${tmpdir}'")
+
+  # Create fifo to get the sub-files' header. This fifo will be shared among
+  # all merge-files, as it's always read completely. This is done during
+  # checking for a valid header.
+  declare -r head="${tmpdir}/head"
+  mkfifo "${head}"
+
+  raw_header=
+  declare -i nr=0
+
+  for fn in ${merge_files[@]}; do
+    # Create temporary fifo
+    body="${tmpdir}/$(printf '%06i' ${nr})"
+    temporary_stack+=("rm '${body}'")
+    mkfifo "${body}"
+
+    # Strip header from merge-file by resolving the problem of closing possible
+    # fifos. We not only want to delete the head-line, but also save it to
+    # check whether all input file have the same head line.
+    strip_header "${fn}" "${head}" "${body}" &
+    fn_header=$(cat "${head}")
+
+    # Read & compare with other headers and fail if any of the headers doesn't match
+    [ -z "${raw_header}" ] && raw_header="${fn_header}"
+    [ "${raw_header}" != "${fn_header}" ] && die -1 "Header of file \`${fn}' does not match!"
+    
+    # Add files to sort command
+    sort_files+=("${body}")
+
+    ((nr += 1))
+  done
+
+  rm "${head}"
+fi
+
+# Make header read-only
+declare -r raw_header
+
+parse_header "${raw_header}" "${fsep}" x_
+locate_fields x_fields[@] x_ ${fields[@]}
+
+# Build final command
+cmd="${sort_backend} -t${fsep}"
+
+# Pass selected fields to sort via commandline options. Field are now identified
+# by their field index. These indices are zero-based, but sort expects them to
+# be one-based. Therefore we simply need do add one to all indices and we're
+# done.
+declare -a sort_keys
+declare -i idx=0
+
+for((idx = 0; idx < ${#x_index[@]}; idx += 1)); do
+  no=$((${x_index[${idx}]} + 1))
+  sf=${x_flags[${idx}]}
+  sort_keys+=("--key=${no},${no}${sf}")
+done
+cmd+=" $(join_by sort_keys[@] ' ')"
+
+if [ 0 -lt "${#sort_files[@]}" ]; then
+  cmd+=" --merge"
+  cmd+=" ${sort_files[@]}"
+fi
+
+# Add non-option arguments and other options
+cmd+=" $@ ${XSORT_FLAGS:-${default_xsort_flags}}"
+declare -r cmd
+
+# Specific behaviour, if the dry-run mode is set. In case dry-run mode was
+# selected, no external program shall be excuted but only print the commands
+# that WOULD be executed.
+if [ 0 -eq ${dry_run:-0} ]; then
+  # Prepend header, as we're not in dry-run mode
+  echo "${raw_header}"
+  eval ${cmd}
+else
+  # Print current command
+  echo "${cmd}"
+fi
+
+# Report success to shell
+exit 0

@@ -1,29 +1,65 @@
-#!/bin/sh
-default_pattern='^[[:space:]]*#'
+#!/bin/bash
 
-args=$(getopt -o p:c: -n ${0##*/} -- "$@")
-eval set -- "$args"
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xcomment
+# License:  GPL-3.0
 
+set -e
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r default_pattern='^[[:space:]]*#'
+declare -r egrep_backend=$(find_program_like ${egrep_like_programs[@]})
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(getopt --options=c:h \
+  --longoptions=help,pattern: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
 while true; do
-  case $1 in
-    -c)
-      # Change only comment character
-      pattern="^[[:space:]]*$2"
-      shift 2
-      ;;
+  case ${1} in
+  -c) # Change only comment character
+    pattern="^[[:space:]]*${2}"
+    shift 2
+    ;;
 
-    -p)
-      # Change complete comment pattern
-      pattern=$2
-      shift 2
-      ;;
+  --pattern) # Change complete comment pattern
+    pattern=${2}
+    shift 2
+    ;;
 
-    --)
-      shift
-      break
-      ;;
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Strip comments from input. The input is read from standard input.
+
+Available flags for OPT:
+  -c CHAR
+    Identify lines that start with CHAR as comments. Leading blanks are
+    ignored. The whole line is taken as comment. Default is #.
+
+  --pattern=EXPR
+    Identify lines that match the extended regular expression EXPR as comments.
+    Default is \`${default_pattern}'.
+
+  -h, --help
+    $(help_help_message)
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
 # Keep only lines without pattern
-egrep -v "${pattern:-$default_pattern}"
+${egrep_backend} -v "${pattern:-${default_pattern}}"
+exit 0

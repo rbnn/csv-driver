@@ -1,55 +1,98 @@
-#!/bin/sh
+#!/bin/bash
 
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xcount
+# License:  GPL-3.0
+
+set -e
 source xbase
+
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r nl_backend=$(find_program_like ${nl_like_programs[@]})
+declare -r sed_backend=$(find_program_like ${sed_like_programs[@]})
+declare -r default_xnl_index=index
+declare -r default_xnl_value=
+declare -r default_xnl_start=1
 
 # Initialize default field-separator
 fsep=$(set_fsep)
 column="index"
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o c:ht:s: -l help -n "$program_name" -- "$@")
-eval set -- "$args"
+declare -r args=$(${getopt_backend} --options=ht: \
+  --longoptions=help,with-index:,set:,start: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
 
 # Parse arguments
 while true; do
-  case $1 in
-    -c)
-      # Specify field
-      column=${2:?Invalid column name}
-      shift 2
-      ;;
+  case ${1} in
+  -t) # Field separator
+    fsep=$(set_fsep $2)
+    shift 2
+    ;;
 
-    -s)
-      # Set value
-      value=${2:?Invalid value}
-      shift 2
-      ;;
+  --with-index) # Set index column
+    user_index=${2}
+    shift 2
+    ;;
 
-    -t)
-      # Change field sepearator (default is comma)
-      fsep=$(set_fsep $2)
-      shift 2
-      ;;
+  --set) # Set predefined value
+    user_value=${2}
+    shift 2
+    ;;
 
-    -h|--help)
-      cat << EOF
-  -c STR    Use STR as index-column
-  -s VAL    Use VAL instead of line number
-  -t FS     Field separator
-  -h|--help Print this message and terminate
+  --start) # Start counting
+    user_start=${2}
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Calculate row indices for data from standard input.
+
+Available flags for OPT:
+  -t FS
+    $(fsep_help_message)
+
+  --with-index=COLUMN
+    Write row indices into COLUMN.
+
+  --set=VALUE
+    Set row indices to VALUE.
+
+  --start=N
+    Start indexing rows with N
+
+  -h, --help
+    $(help_help_message)
 EOF
-      shift
-      exit 0
-      ;;
- 
-    --)
-      shift
-      break
-      ;;
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
-xheader -p "${column}" | \
-if [ -z "$value" ]; then  xdriver -t ${fsep} -c "$_nl -w1 -ba"
-else sed -e "2,\$s@^@$value$fsep@"
-fi
+declare -r user_index=${user_index:-${default_xnl_index}}
+declare -r user_value=${user_value:-${default_xnl_value}}
+declare -r user_start=${user_start:-${default_xnl_start}}
+
+if [ -n "${user_value}" ]; then
+  # Set constant
+  ${sed_backend} -e "2,\$s@^@${user_value}${fsep}@"
+else
+  # Count rows
+  xbody ${nl_backend} -w1 -ba -s${fsep} --starting-line-number=${user_start}
+fi | xheader --prepend="${user_index}"
+
+# Report success to shell
+exit 0

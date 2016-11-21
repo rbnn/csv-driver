@@ -1,83 +1,208 @@
-#!/bin/sh
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xcount
+# License:  GPL-3.0
+
+# Usage: generateCountProgram FIELDS COUNT [SUM SUM_AS]
+function generateCountProgram()
+{
+  #{{{
+  local -ra fields=(${!1:?Missing FIELDS})
+  local -r count=${2:?Missing COUNT}
+
+  # Join fields to form a new header
+  local -r header=$(join_by fields[@] "${fsep}")
+
+  # Generate the multi-field key
+  local -a key_list
+  for key in "${fields[@]}"; do key_list+=("%${key}%"); done
+  declare -r keydef='":"'$(printf '%s":"' "${key_list[@]}")
+  declare -r keyval=$(join_by key_list[@] ,)
+
+  if [ -n "${3}" ]; then
+    local -r sum_field=${3:?Missing SUM_FIELD}
+    local -r sum_column=${4:?Missing SUM_COLUMN}
+
+    local -r optional_sum_header=", \"${sum_column}\""
+    local -r optional_reset_sum="sum = %${sum_field}%;"
+    local -r optional_update_sum="sum += %${sum_field}%;"
+    local -r optional_write_sum=", sum"
+  fi
+
+  cat << EOF
+BEGIN { print "${header}", "${count}"${optional_sum_header}; }
+
+1 == NR {
+  key = ${keydef};
+  cnt = 1;
+  row = \$0;
+  ${optional_reset_sum}
+  next;
+}
+
+(1 < NR) && (key == ${keydef}) {
+  cnt += 1;
+  ${optional_update_sum}
+  next;
+}
+
+(1 < NR) && (key != ${keydef}) {
+  new_row = \$0;
+  \$0 = row;
+  print ${keyval}, cnt ${optional_write_sum};
+
+  \$0 = new_row;
+  key = ${keydef};
+  cnt = 1;
+  row = \$0;
+  ${optional_reset_sum}
+  next;
+}
+
+END {
+  print ${keyval}, cnt ${optional_write_sum};
+}
+EOF
+  #}}}
+}
+
+function clean_up()
+{
+  #{{{
+  # Delete temporary files
+  for file in "${temporary_files[@]}"; do rm -f "${file}"; done
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
 
 source xbase
 
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r default_xcount_field=class
+declare -r default_xcount_count=count
+declare -r default_xcount_sum_as=sum
+declare -r default_xcount_flags=
+declare -a temporary_files
+declare -a user_fields
+
 # Initialize default field-separator
 fsep=$(set_fsep)
-field=class
-count=count
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o c:f:ht: -l help -n ${0##*/} -- "$@")
-eval set -- "$args"
+declare -r args=$(${getopt_backend} --options=df:ht: \
+  --longoptions=help,with-count:,with-sum:,sum: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
 
+# Parse arguments
 while true; do
   case $1 in
-    -c)
-      # Configure column holding the class counts
-      count=${2:?Invalid count label}
-      shift 2
-      ;;
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
 
-    -f)
-      # Configure column, the data is taken from
-      field=${2:?Invalid field name}
-      shift 2
-      ;;
+  -f) # Count field
+    IFS=, read -r -a tmp_field <<< "${2}"
+    user_fields=(${user_fields[@]} ${tmp_field[@]})
+    shift 2
+    ;;
 
-    -t)
-      # Change field sepearator (default is comma)
-      fsep=$(set_fsep $2)
-      shift 2
-      ;;
+  -t) # Field separator
+    fsep=$(set_fsep $2)
+    shift 2
+    ;;
 
-    -h|--help)
-      cat << EOF
-Count sorted class labels
+  --sum)
+    user_sum=${2}
+    shift 2
+    ;;
+
+  --with-count) # Count into column
+    user_count=${2}
+    shift 2
+    ;;
+
+  --with-sum)
+    user_sum_as=${2}
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Count class labels from standard input. In detail, the program counts the
+length of subsequent key-runs. E.g.:
+  ...
+  key_0   # End of \`key_0'-run   --> length=N  --> count=N
+  key_1   # Start of \`key_1'-run --> length=1
+  key_1   # Inside \`key_1'-run   --> length=2
+  key_1   # End of \`key_1'-run   --> length=3  --> count=3
+  key_2   # Complete \`key_2'-run --> length=1  --> count=1
+  key_1   # Complete \`key_1'-run --> length=1  --> count=1
+  key_3   # Start of \`key_3'-run --> length=?
+  ...
+
+It is obvious, that the keys need to be sorted in an appropriate way, but there
+is no specific order required. Any order will do.
+
+Available flags for OPT:
+  -d
+    Enable dry-run mode. The xawk not be invoked, but the configured command
+    will be written to standard output.
+
+  -f FIELDS
+    Read class labels from FIELDS (default is \`${default_xcount_field}').
+    FIELDS might be a single field name or a comma separated list of field
+    names. The FIELDS determine the \`key_x' from the example above.
+
+  -t FS
+    $(fsep_help_message)
+
+  --with-count=COLUMN
+    Write class label counts into COLUMN (default is \`${default_xcount_count}').
+
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" xawk XCOUNT_FLAGS "${default_xcount_flags}")
+
+Backend: $(which xawk)
 EOF
-      shift
-      exit 0
-      ;;
+    shift
+    exit 0
+    ;;
 
-    --)
-      shift
-      break
-      ;;
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
-awk_program=$(mktemp "${0##*/}.XXXXX")
-cat << EOF > "$awk_program"
-  1 == NR {
-    idx = \$_$field;
-    cnt = 1;
-    next;
-  }
+declare -r count_program=$(mktemp)
+temporary_files+=("${count_program}")
 
-  (1 < NR) && (idx == \$_$field) {
-    cnt += 1;
-    next;
-  }
+declare -r user_count=${user_count:-${default_xcount_count}}
+declare -r user_sum_as=${user_sum_as:-${default_xcount_sum_as}}
 
-  (1 < NR) && (idx != \$_$field) {
-    print idx, cnt;
+[ 0 -eq ${#user_fields[@]} ] && user_fields=("${default_xcount_field}")
+generateCountProgram user_fields[@] "${user_count}" "${user_sum}" "${user_sum_as}" > "${count_program}"
 
-    // Print empty classes
-    for(jdx = idx + 1; jdx < \$_$field; jdx += 1) {
-      print jdx, 0;
-    }
+cmd="xawk -t${fsep} --prefix=% --suffix=% -H '${count_program}'"
+cmd+=" $@ ${XCOUNT_FLAGS:-${default_xcount_flags}}"
+declare -r cmd
 
-    idx = \$_$field;
-    cnt = 1;
-    next;
-  }
+# If dry-run mode is enabled, cmd will only be echoed
+if [ 0 -eq ${dry_run:-0} ]; then eval "${cmd}"
+else echo "${cmd}"
+fi
 
-  END {
-    print idx, cnt;
-  }
-EOF
-
-xawk -t "$fsep" -H -- -f "$awk_program" \
-  | xheader -i "$field""$fsep""$count"
-
-rm "$awk_program"
+# Report success to shell
+exit 0

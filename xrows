@@ -1,54 +1,104 @@
-#!/bin/sh
+#!/bin/bash
 
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xrows
+# License:  GPL-3.0
+
+set -e
 source xbase
 
-program_name=${0##*/}
-usage_message="Invalid usage! See \`$program_name --help' for help."
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r sed_backend=$(find_program_like ${sed_like_programs[@]})
+declare -a selection
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o dhf:t: -l help -n ${0##*/} -- "$@")
-eval set -- "$args"
+declare -r args=$(${getopt_backend} --options=dh \
+  --longoptions=help,from:,to:,list: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
 
 # Parse arguments
 while true; do
   case $1 in
-    -d)
-      dry_run=1
-      shift
-      ;;
-      
-    -h|--help)
-      cat << EOF
-  -d      Dry run
-  -f ROW  From row
-  -t ROW  To row
-  -h|--help
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
+
+  --from) # Lower limit
+    from=${2}
+    shift 2
+    ;;
+
+  --to) # Upper limit
+    till=${2}
+    shift 2
+    ;;
+
+  --list) # Explicitly select rows
+    IFS=, read -ra tmp_selection <<< "${2}"
+    selection=(${selection[@]} ${tmp_selection[@]})
+    shift 2
+    ;;
+    
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Select range of rows passed via stdin. The header is excluded from the range of
+selectable rows. The numbering of rows starts with one, which is the first row
+below the header.
+header.
+
+Available flags for OPT:
+  -d
+    Enable basic dry-run mode. The backend will not be invoked, but the
+    configured command will be written to standard output.
+
+  --from=ROW
+    Range begins in ROW (including)
+
+  --to=ROW
+    Range ends in ROW (including)
+
+  --list=LIST
+    Excplicitly select rows from comma separated LIST
+
+  -h, --help
+    $(help_help_message)
 EOF
-      shift
-      exit 0
-      ;;
+    shift
+    exit 0
+    ;;
 
-    -f)
-      from=${2:?Invalid row}
-      shift 2
-      ;;
-
-    -t)
-      # Update field-separator
-      till=${2:?Invalid rows}
-      shift 2
-      ;;
-
-    --)
-      shift
-      break
-      ;;
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
-cmd="xdriver -c '$_sed -ne ${from:-1},${till:-\$}""p'"
+declare -a sed_arguments
+for l in "${selection[@]}"; do sed_arguments+=("-ne ${l}p"); done
+if [ '$' = ${till:-0} ] \
+  || [ ${from:-0} -lt ${till:-0} ] \
+  || ([ 0 -eq ${till:-0} ] && [ 0 -lt ${from:-0} ]); then
+  sed_arguments+=("-ne ${from:-1},${till:-\$}p")
 
-# Prepend echo-command for dry-run-mode
-[ 0 -ne ${dry_run:-0} ] && cmd="$_echo ""$cmd"
+elif [ 0 -lt ${from:-0} ] && [ ${from:-0} -eq ${till:-0} ]; then
+  sed_arguments+=("-ne ${from:-1}p")
 
-eval $cmd
+fi
+
+if [ 0 -eq ${dry_run:-0} ]; then
+  # Normal mode
+  xbody "${sed_backend} ${sed_arguments[*]}"
+else
+  # Dry run mode
+  echo "xbody ${sed_backend} ${sed_arguments[*]}"
+fi
+
+# Report success to shell
+exit 0

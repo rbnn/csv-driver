@@ -1,0 +1,259 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xfillrows
+# License:  GPL-3.0
+
+# Usage: generateFillRowsProgram FIELD INC MODE REVERSE [ROW]
+function generateFillRowsProgram()
+{
+  #{{{
+  local -r field=${1:?Missing FIELD}
+  local -ri inc=${2:?Missing INC}
+  local -r row=${5}
+
+  case ${3:?Missing MODE} in
+  prev) local -r mode='$0 = prev_row' ;;
+  next) local -r mode='$0 = next_row' ;;
+  user)
+    local -r mode='parse_from_user_row()'
+    [ -z "${row}" ] && die -1 "MODE=user requires argument ROW!"
+    ;;
+  nan) local -r mode='fill_with_nan()' ;;
+  set)
+    local -r mode='fill_with_value()'
+    [ -z "${row}" ] && die -1 "MODE=set requires argument ROW!"
+    ;;
+  *) die -1 "Invalid MODE!" ;;
+  esac
+
+  case ${4:?Missing REVERSE} in
+  yes) local -r order='reverse_order()' ;;
+  *) local -r order='normal_order()' ;;
+  esac
+  
+  cat << EOF
+function parse_from_user_row(i,n,x)
+{
+  # Force i, n, x to be defined in local scope
+  n = split("${row}", x, "${fsep}");
+  for(i = 1; i <= NF; i += 1) { \$i = x[i]; }
+}
+
+function fill_with_nan(i)
+{
+  for(i = 1; i <= NF; i += 1) { \$i = "nan"; }
+}
+
+function fill_with_value(i)
+{
+  for(i = 1; i <= NF; i += 1) { \$i = "${row}"; }
+}
+
+function normal_order()
+{
+  if((next_key - prev_key) > (${inc})) {
+    for(i = prev_key + (${inc}); i < next_key; i += (${inc})) {
+      ${mode};
+      %${field}% = i;
+      print \$0;
+    }
+  }
+}
+
+function reverse_order()
+{
+  if(-(next_key - prev_key) > -(${inc})) {
+    for(i = prev_key - (${inc}); i > next_key; i -= (${inc})) {
+      ${mode};
+      %${field}% = i;
+      print \$0;
+    }
+  }
+}
+
+1 == NR {
+  print \$0;
+
+  prev_key = %${field}%;
+  prev_row = \$0;
+}
+
+1 < NR {
+  next_key = %${field}%;
+  next_row = \$0;
+
+  ${order};
+
+  print next_row;
+
+  prev_key = next_key;
+  prev_row = next_row;
+}
+EOF
+  #}}}
+}
+
+function clean_up()
+{
+  #{{{
+  # Delete temporary files
+  for file in "${temporary_files[@]}"; do rm -f "${file}"; done
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
+
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r default_xfillrows_field=class
+declare -r default_xfillrows_inc=1
+declare -r default_xfillrows_mode=prev
+declare -r default_xfillrows_reverse=no
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(${getopt_backend} --options=df:ht: \
+  --longoptions=help,inc:,prev,next,nan,set:,user:,reverse \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
+
+  -f) # Fill field
+    user_field=${2}
+    shift 2
+    ;;
+
+  -t) # Field separator
+    fsep=$(set_fsep $2)
+    shift 2
+    ;;
+
+  --inc) # Increment
+    [ ! 0 -lt ${2} ] && die -1 "Invalid increment value!"
+    user_inc=${2}
+    shift 2
+    ;;
+
+  --prev) # Use previous row
+    user_mode=prev
+    shift
+    ;;
+
+  --next) # Use next row
+    user_mode=next
+    shift
+    ;;
+
+  --nan) # Fill rows with nans
+    user_mode=nan
+    shift
+    ;;
+
+  --set) # Fill rows with Value
+    user_mode=set
+    user_row=${2}
+    shift 2
+    ;;
+
+  --user) # Use user-defined string
+    user_mode=user
+    user_row=${2}
+    shift 2
+    ;;
+
+  --reverse) # Reverse order
+    user_reverse=yes
+    shift
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Insert missing rows. Rows are identified as missing, if the FIELD of subsequent
+rows differs more than INC, therefore FIELD must be sorted in ascending order.
+All missing rows between the previous and following one are inserted.
+
+Available flags for OPT:
+  -d
+    Enable dry-run mode. The xawk not be invoked, but the configured command
+    will be written to standard output.
+
+  -f FIELD
+    Identify missing rows by FIELD (default is \`${default_xfillrows_field}').
+
+  -t FS
+    $(fsep_help_message)
+
+  --inc=N
+    Accept increment of N between subsequent rows (default is \`${default_xfillrows_inc}).
+    The increment must not be greater than zero.
+
+  --prev, --next
+    Replace missing rows by the previous/next available row. FIELD will be
+    updated appropriately.
+
+  --nan
+    Fill missing rows with \`nan' and update FIELD appropriately.
+
+  --set=VALUE
+    Fill missing rows with VALUE and update FIELD appropriately.
+
+  --user=ROW
+    Insert ROW for every missing row and update FIELD appropriately.
+
+  --reverse
+    Reverse FIELD order, i.e. FIELD is sorted in descending order.
+
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" xawk XFILLROWS_FLAGS "${default_xfillrows_flags}")
+
+Backend: $(which xawk)
+EOF
+    shift
+    exit 0
+    ;;
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+declare -r fillrows_program=$(mktemp)
+temporary_files+=("${fillrows_program}")
+
+declare -r user_field=${user_field:-${default_xfillrows_field}}
+declare -r user_inc=${user_inc:-${default_xfillrows_inc}}
+declare -r user_mode=${user_mode:-${default_xfillrows_mode}}
+declare -r user_reverse=${user_reverse:-${default_xfillrows_reverse}}
+
+generateFillRowsProgram "${user_field}" ${user_inc} ${user_mode} ${user_reverse} "${user_row}" > "${fillrows_program}"
+
+cmd="xawk -t${fsep} --prefix=% --suffix=% '${fillrows_program}'"
+cmd+=" $@ ${XFILLROWS_FLAGS:-${default_xfillrows_flags}}"
+declare -r cmd
+
+# If dry-run mode is enabled, cmd will only be echoed
+if [ 0 -eq ${dry_run:-0} ]; then eval "${cmd}"
+else echo "${cmd}"
+fi
+
+# Report success to shell
+exit 0

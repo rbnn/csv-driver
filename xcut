@@ -1,55 +1,92 @@
-#!/bin/sh
+#!/bin/bash
 
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xjoin
+# License:  GPL-3.0
+
+set -e
 source xbase
 
-program_name=${0##*/}
-usage_message="Invalid usage! See \`$program_name --help' for help."
+declare -r program_name=${0##*/}
+declare -r default_xcut_flags=
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r cut_backend=$(find_program_like ${cut_like_programs[@]})
 
 # Initialize default field-separator
 fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o dhf:t: -l help -n ${0##*/} -- "$@")
+declare -r args=$(${getopt_backend} --options=dhf:t: \
+  --longoptions=help,complement \
+  --name="${program_name}" -- "$@")
 eval set -- "$args"
 
 # Parse arguments
 while true; do
   case $1 in
-    -d)
-      dry_run=1
-      shift
-      ;;
-      
-    -h|--help)
-      cat << EOF
-  -d          Dry run
-  -f FIELD
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
+
+  -f) # Append list of fields
+    IFS=, read -r -a tmp_field <<< "${2}"
+    fields=(${fields[@]} ${tmp_field[@]})
+    shift 2
+    ;;
+
+  -t) # Update field-separator
+    fsep=$(set_fsep ${2})
+    shift 2
+    ;;
+
+  --complement) # Use complement of field selection
+    select_complement=1
+    shift
+    ;;
+    
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT] [-- ...]
+
+Select columns from input by column names. The input is read from standard
+input.
+
+Available flags for OPT:
+  -d
+    Enable dry-run mode. The backend will not be invoked, but the configured
+    command will be written to standard output.
+    
+  -f FIELDS
+    Select FIELDS for output. FIELDS might either be a single field name or a
+    comma separated list of field names.
+
   -t FS
-  -h|--help
+    $(fsep_help_message)
+
+  --complement
+    Complement the set of selected fields
+
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" "${cut_backend}" XCUT_FLAGS "${default_xcut_flags}")
+
+Backend: ${cut_backend}
 EOF
-      shift
-      exit 0
-      ;;
+    shift
+    exit 0
+    ;;
 
-    -f)
-      cnt=$((${#fields[@]} + 1))
-      fields[$cnt]=$2
-      shift 2
-      ;;
-
-    -t)
-      # Update field-separator
-      fsep=$(set_fsep $2)
-      shift 2
-      ;;
-
-    --)
-      shift
-      break
-      ;;
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
+# Coreutils' cut program expects
 # Fields must be unique
 num_fields=${#fields[@]}
 num_unique=($(printf "%s\n" "${fields[@]}" | sort -u | wc -l))
@@ -58,24 +95,43 @@ num_unique=($(printf "%s\n" "${fields[@]}" | sort -u | wc -l))
 # Read first row and keep stdin open
 IFS= read -r raw_header
 
-# Parse head line into x_fields and x_flags
-parse_header "$raw_header" "$fsep" x_
+# Parse head line into arrays x_fields and x_flags. x_fields will contain all
+# field names found in the header, while x_flags contains all sort-flags like
+# `n' or `g'.
+parse_header "${raw_header}" "${fsep}" x_
 
-# Find columns in x_fields and store indices into x_index and x_found
-find_fields x_fields[@] x_ ${fields[@]}
+# Find columns in x_fields and store indices into x_index and x_found. These
+# indices are zero-based.
+locate_fields x_fields[@] x_ ${fields[@]}
 
 # Build final command
-cmd=""
-cmd+=$(replace_fsep "$_cut" "$fsep")
+cmd="${cut_backend} -d${fsep}"
 
+# Did the use want to complement his selection?
+[ 0 -lt ${select_complement:-0} ] && cmd+=" --complement"
+
+# Pass selected fields to cut via commandline options. Field are now identified
+# by their field index. These indices are zero-based, but cut expects them to
+# be one-based. Therefore we simply need do add one to all indices and we're
+# done.
 declare -a x_column
-for idx in "${x_index[@]}"; do x_column[$idx]=$((idx + 1)); done
+for idx in "${x_index[@]}"; do x_column+=("$((idx + 1))"); done
 cmd+=" -f "$(join_by x_column[@] ,)
 
-# Prepend header if not in dry-run mode
-[ 0 -eq ${dry_run:-0} ] && echo $(join_by x_found[@] "$fsep")
+# Add non-option arguments and other options
+cmd+=" $@ ${XCUT_FLAGS:-${default_xcut_flags}}"
+declare -r cmd
 
-# Prefix final command for dry-run
-[ 0 -ne ${dry_run:-0} ] && cmd="$_echo $cmd"
+# Specific behaviour, if the dry-run mode is set. In case dry-run mode was
+# selected, no external program shall be excuted but only print the commands
+# that WOULD be executed.
+if [ 0 -eq ${dry_run:-0} ]; then
+  # Prepend header, as we're not in dry-run mode
+  (echo "${raw_header}"; cat ) | eval ${cmd}
+else
+  # Print current command
+  echo "${cmd}"
+fi
 
-$cmd
+# Report success to shell
+exit 0

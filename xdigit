@@ -1,143 +1,201 @@
-#!/bin/sh
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xdigit
+# License:  GPL-3.0
+
+function clean_up()
+{
+  #{{{
+  for file in "${temporary_files[@]}"; do rm -f "${file}" 2> /dev/null; done
+  #}}}
+}
+
+# Usage: generateDigitizeProgram FIELD BINS [UPPER]
+function generateDigitizeProgram()
+{
+  #{{{
+  local -r _field=${1:?Missing FIELD}
+  local -r _bins=${2:?Missing BINS}
+
+  # How should the boundaries be handled?
+  # upper=no  --> lo <= x <  hi (default
+  # upper=yes --> lo <  x <= hi
+  case "${3:-no}" in
+  yes) local -ra _compare=("<" "<=") ;;
+  *) local -ra _compare=("<=" "<") ;;
+  esac
+
+  cat << EOF
+1 == NR {
+  lower = %%${_bins}%%;
+  print "(%${_field}% ${_compare[0]} lower) { print \$0, 0; next }";
+  class = 1;
+}
+
+1 < NR {
+  upper = %%${_bins}%%;
+
+  print "("lower" ${_compare[0]} %${_field}%) && (%${_field}% ${_compare[1]} "upper") { print \$0, "class"; next}";
+
+  lower = upper;
+  class += 1;
+}
+
+END {
+  print "("upper" ${_compare[1]} %${_field}%) { print \$0, "class"; next }";
+}
+EOF
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
 
 source xbase
+
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r default_xdigit_field=value
+declare -r default_xdigit_class=class
+declare -r default_xdigit_bins=bins
+declare -r default_xdigit_meta_flags=
+declare -r default_xdigit_flags=
+declare -a temporary_files
 
 # Initialize default field-separator
 fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o b:c:f:ht:u -l help -n ${0##*/} -- "$@")
-eval set -- "$args"
+declare -r args=$(${getopt_backend} --options=b:f:ht: \
+  --longoptions=help,bins:,with-class:,upper \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
 
-default_class="class"
-default_input="value"
-default_bin="value"
-
+# Parse arguments
 while true; do
-  case $1 in
-    -b)
-      # Read binning limits from this column
-      bin_field=${2:?Invalid bin field}
-      shift 2
-      ;;
+  case ${1} in
+  -b|--bins) # Read binning limits from this column
+    user_bins=${2}
+    shift 2
+    ;;
 
-    -c)
-      # Write class labels into this column
-      class_field=${2:?Invalid class field}
-      shift 2
-      ;;
+  -f) # Read input data from this column
+    user_field=${2}
+    shift 2
+    ;;
 
-    -f)
-      # Read input data from this column
-      input_field=${2:?Invalid input field}
-      shift 2
-      ;;
+  -t) # Field separator
+    fsep=$(set_fsep $2)
+    shift 2
+    ;;
 
-    -t)
-      # Change field sepearator (default is comma)
-      fsep=$(set_fsep $2)
-      shift 2
-      ;;
+  --with-class) # Write class labels into this column
+    user_class=${2}
+    shift 2
+    ;;
 
-    -u)
-      # Allow equality for upper bound
-      operator_lower="<"
-      operator_upper="<="
-      shift
-      ;;
+  --upper)
+    # Allow equality for upper bound
+    user_upper=yes
+    shift
+    ;;
 
-    -h|--help)
-      cat << EOF
-Usage: xdigit [OPT] DATA BINS
-  -b BIN    Use column BIN of BINS-file as binning limits (default: $default_bin)
-  -c CLS    Write class labels into column CLS (default: $default_class)
-  -f INP    Calculate class labels for column INP of DATA-file (default: $default_input)
-  -t FS     Use FS as field separator
-  -u        Change class limits to \`lo < x <= hi'
-  -h|--help Print this message and terminate
+  -h|--help)
+    cat << EOF
+Usage: xdigit [OPT] DATA BINS [-- ...]
 
-Class limits (BINS)
-  By default are limited by a lower bound (inclusive) and an upper bound
-  (exclusive). This behaviour can be change by the -u flag. Valid classes
-  are numbered from 1 to N, where N is the number of class limits. There
-  are two implicit classes, that contain all elements
-    0:    less than the lowest lower bound
-    N+1:  greater than the highest upper bound.
+Calculate class labels for input DATA. The class limits are taken from the
+BINS-file. Both DATA and BINS might be compressed files, as they are passed to
+xcat, which can transparently decompress the data based on the filename
+extension. In order to read input from standard input, one (not both) might be
+specified as \`-'. In that case, the data is expected to be uncompressed.
 
-  The class limits are stored in a plain text file as sequence of bounds
-    L0
-    L1
-    L2
-    ...
-    LN
-  that results in following classes:
-    0:          x < L0
-    1:    L0 <= x < L1
-    2:    L1 <= x < L2
-    ...
-    N+1:  LN <= x
+Available flags for OPT:
+  -b, --bins=LIMITS
+    Select class LIMITS from BINS-file (default is \`${default_xdigit_bins}').
+
+  -f FIELD
+    Calculate class labels for FIELD (default is \`${default_xdigit_field}').
+
+  -t FS
+    $(fsep_help_message)
+
+  --with-class=CLASS
+    Write class labels into column CLASS (default is \`${default_xdigit_class}').
+    The new column is appended to the header.
+
+  --upper
+    Accept upper class limits.
+
+  -h, --help
+    $(help_help_message)
+
+Class limits
+For a given class, the label is assigned to all values that are between the
+lower and upper limits. By default this also includes the lower bound itself,
+i.e. lo <= x < hi. This behaviour can be changed by passing \`--upper'. In that
+case the upper bound is included, i.e. lo < x <= hi. Given the BINS file, the
+first row of BIN determines the lower limit for class 1(one). All values below
+this bound will be assigned to clas 0(zero). The last value of BIN determines
+the upper limit for class N (assuming, there are N+1 rows). All values above
+this bound will be assigned to class N+1.
+
+$(getopt_help_message "${program_name}" xawk XDIGIT_FLAGS "${default_xdigit_flags}")
+
+${program_name} uses a two-step approach to calculate class labels. In the
+first step a so-called \`meta-program' is generated from the BINS-file. This
+meta-program contains a set of awk-rules to match the specific classes. In step
+two, this meta-program is applied to the DATA-file to calculate the
+corresponding class labels. This is considered by accepting the environment
+variables \`XDIGIT_META_FLAGS' and \`XDIGIT_FLAGS' which influence the first
+and second step appropriately.
+
+Backend: $(which xawk)
 EOF
-      shift
-      exit 0
-      ;;
+    shift
+    exit 0
+    ;;
 
-    --)
-      shift
-      break
-      ;;
-      
+  --)
+    shift
+    break
+    ;;
+    
   esac
 done
 
 # Read input/bin files
-data=${1:?Missing data file}
-shift
+declare -r data_file=${1:?Missing DATA}
+declare -r bins_file=${2:?Missing BINS}
+shift 2
 
-bins=${1:?Missing data bins}
-shift
+declare -r user_field=${user_field:-${default_xdigit_field}}
+declare -r user_class=${user_class:-${default_xdigit_class}}
+declare -r user_bins=${user_bins:-${default_xdigit_bins}}
 
-# Create temporary file for awk-program
-awk_program=$(mktemp "${0##*/}".XXXXXX)
-awk_meta=$(mktemp "${0##*/}".XXXXXX)
+declare -r meta_program=$(mktemp)
+temporary_files+=("${meta_program}")
+generateDigitizeProgram "${user_field}" "${user_bins}" "${user_upper}" > "${meta_program}"
 
-class=${class_field:-$default_class}
-limit=${bin_field:-$default_bin}
-lower=${operator_lower:-"<="}
-upper=${operator_upper:-"<"}
+declare -r main_program=$(mktemp)
+temporary_files+=("${main_program}")
 
+# Check for double/invalid usage of `-'
+if [ "-" == "${data_file}" ] && [ "-" == "${bins_file}" ]; then
+  die -1 "Cannot read DATA and BINS from stdin!"
+fi
 
-cat > "$awk_meta" << EOF
-1 == NR {
-  cur_limit=\$_$limit;
-  min_limit=\$_$limit;
-  max_limit=\$_$limit;
-  cur_class=1;
-}
+# Apply meta-program to BINS
+xcat "${bins_file}" \
+  | xawk -t${fsep} -H --prefix=%% --suffix=%% "${meta_program}" $@ "${XDIGIT_META_FLAGS:-${default_xdigit_meta_flags}}" \
+  > "${main_program}"
 
-1 < NR {
-  print "("cur_limit" $lower %input%) && (%input% $upper "\$_$limit") { print "cur_class", \$0; next }";
-  min_limit = (min_limit > \$_$limit) ? \$_$limit : min_limit;
-  max_limit = (max_limit < \$_$limit) ? \$_$limit : max_limit;
-  cur_limit = \$_$limit;
-  cur_class += 1;
-}
+# Calculate class labels for DATA
+xcat "${data_file}" \
+  | xawk -t${fsep} --prefix=% --suffix=% "${main_program}" $@ "${XDIGIT_FLAGS:-${default_xdigit_flags}}" \
+  | xheader -t${fsep} --append="${user_class}"
 
-END {
-  print "(%input% $upper "min_limit") { print 0, \$0; next }";
-  print "("max_limit" $lower %input%) { print "cur_class", \$0; next }";
-}
-EOF
-
-xcat "$bins" \
-  | xawk -H -t "$fsep" -- -f "$awk_meta" \
-  | sed -e "s/%input%/\$_${input_field:-$default_input}/g" \
-  > "$awk_program"
-
-# Print data file either by name or from stdin. A new column is prepended to
-# contain the class label.
-cat "$data" \
-  | xawk -t "$fsep" -- -f "$awk_program" \
-  | xheader -t "$fsep" -p "$class"
-
-rm "$awk_program"
-rm "$awk_meta"
+# Report success to shell
+exit 0

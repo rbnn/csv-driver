@@ -1,51 +1,113 @@
-#!/bin/sh
+#!/bin/bash
 
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xcat
+# License:  GPL-3.0
+
+set -e
 source xbase
 
-_cat=$(which cat 2> /dev/null | head -n1)
-_gzip=$(which pigz gzip 2> /dev/null | head -n1)
-_bzip=$(which bzip2 2> /dev/null | head -n1)
-_xz=$(which xz 2> /dev/null | head -n1)
-_lzma=$(which lzma 2> /dev/null | head -n1)
+declare -r program_name=${0##*/}
 
-pos=0
+# Configure filetype-driver
+declare -r _gzip=$(find_program_like pigz gzip)
+declare -r _bzip=$(find_program_like bzip2)
+declare -r _xz=$(find_program_like xz)
+declare -r _lzma=$(find_program_like lzma)
+
+declare -a available_drivers=("plain")
+[ -x "${_bzip}" ] && available_drivers+=("bzip2")
+[ -x "${_gzip}" ] && available_drivers+=("gzip")
+[ -x "${_lzma}" ] && available_drivers+=("lzma")
+[ -x "${_xz}" ] && available_drivers+=("xz")
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(getopt --options=h --longoptions=help,driver --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  --driver) # Print installed drivers
+    echo "plain --> $(which cat)"
+    [ -x "${_bzip}" ] && echo "bzip --> ${_bzip}"
+    [ -x "${_gzip}" ] && echo "gzip --> ${_gzip}"
+    [ -x "${_lzma}" ] && echo "lzma --> ${_lzma}"
+    [ -x "${_xz}" ] && echo "xz --> ${_xz}"
+    shift
+    exit 0
+    ;;
+
+  -h|--help)  # Print help message
+    cat << EOF
+Usage: ${program_name} [OPT] FILE...
+
+Concatenate FILE contents to standard output. This works like cat(1), except
+that ${program_name} automatically detects filetypes by their filename
+extension and applies an appropriate decompression driver. Driver-specific
+options may be passed through environment variables like XCAT_<DRIVER_FLAGS.
+E.g for plain files (typically the driver is cat(1)):
+  XCAT_PLAIN_FLAGS=--number ${program_name} FILE
+
+Available flags for OPT:
+  --driver
+    List installed drivers
+
+  -h, --help
+    $(help_help_message)
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+declare -i pos=0
 for file in "$@"; do
-  pos=$((pos + 1))
+  ((pos += 1))
 
   # Check if filename is valid
-  [ -z "$file" ] && die -1 "Invalid filename at position $pos!"
+  [ -z "${file}" ] && die -1 "Invalid filename at position ${pos}!"
 
   # Check if file exists (except `-' for stdin)
-  [ ! "-" = "$file" ] && [ ! -e "$file" ] && die -1 "No such file: $file"
+  [ ! "-" = "${file}" ] && [ ! -e "${file}" ] && die -1 "No such file: ${file}"
 
   # Extract fileextension (lower-case)
   filetype=$(tr '[[:upper:]]' '[[:lower:]]' <<< ${file##*.})
 
   # Filetype specific behaviour
   case "$filetype" in
-    gz)
-      [ ! -x "$_gzip" ] && die -1 "No driver for $filetype files!"
-      $_gzip -cd "$file"
-      ;;
+  gz|gzip)
+    [ ! -x "${_gzip}" ] && die -1 "No driver for ${filetype} files!"
+    ${_gzip} -cd ${XCAT_GZIP_FLAGS} "${file}"
+    ;;
 
-    bz2)
-      [ ! -x "$_bzip" ] && die -1 "No driver for $filetype files!"
-      $_bzip2 -cd "$file"
-      ;;
+  bz2|bzip2)
+    [ ! -x "${_bzip}" ] && die -1 "No driver for ${filetype} files!"
+    ${_bzip} -cd ${XCAT_BZIP_FLAGS} "${file}"
+    ;;
 
-    xz)
-      [ ! -x "$_xz" ] && die -1 "No driver for $filetype files!"
-      $_xz -cd "$file"
-      ;;
+  xz)
+    [ ! -x "${_xz}" ] && die -1 "No driver for ${filetype} files!"
+    ${_xz} -cd ${XCAT_XZ_FLAGS} "${file}"
+    ;;
 
-    lzma)
-      [ ! -x "$_lzma" ] && die -1 "No driver for $filetype files!"
-      $_lzma -cd "$file"
-      ;;
+  lzma)
+    [ ! -x "${_lzma}" ] && die -1 "No driver for ${filetype} files!"
+    ${_lzma} -cd ${XCAT_LZMA_FLAGS} "${file}"
+    ;;
 
-    *)
-      [ ! -x "$_cat" ] && die -1 "No driver for $filetype files!"
-      $_cat "$file"
-      ;;
+  *)
+    cat ${XCAT_PLAIN_FLAGS} "${file}"
+    ;;
   esac
 done
+
+# Report success to shell
+exit 0

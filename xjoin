@@ -1,113 +1,183 @@
-#!/bin/sh
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xjoin
+# License:  GPL-3.0
+
+function clean_up()
+{
+  #{{{
+  # Close file descriptors...
+  exec 5>&-
+  exec 4>&-
+
+  for file in "${temporary_files[@]}"; do rm -f "${file}" 2> /dev/null; done
+  rmdir "${tmpdir}" 2> /dev/null
+  true
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
 
 source xbase
+
+declare -r program_name=${0##*/}
+declare -r default_xjoin_flags=--check-order
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r join_backend=$(find_program_like ${join_like_programs[@]})
+declare -a temporary_files
 
 # Initialize default field-separator
 fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o 1:2:dj:t: -l help,left-prefix:,left-suffix:,right-prefix:,right-suffix: -n "$program_name" -- "$@")
-eval set -- "$args"
+declare -r args=$(${getopt_backend} --options=1:2:dhj:t: \
+  --longoptions=help,left-prefix:,left-suffix:,right-prefix:,right-suffix: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
 
 # Parse arguments
 while true; do
-  case $1 in
-    -1)
-      left_field=${2:?Invalid left join field}
-      shift 2
-      ;;
+  case ${1} in
+  -1) # Set left key
+    left_field=${2}
+    shift 2
+    ;;
 
-    -2)
-      right_field=${2:?Invalud right join field}
-      shift 2
-      ;;
+  -2) # Set right key
+    right_field=${2}
+    shift 2
+    ;;
 
-    -d)
-      dry_run=1
-      shift
-      ;;
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
 
-    -j)
-      left_field=${2:?Invalid left join field}
-      right_field=${2:?Invalud right join field}
-      shift 2
-      ;;
+  -j) # Common join field
+    left_field=${2}
+    right_field=${2}
+    shift 2
+    ;;
 
-    --left-prefix)
-      left_prefix=$2
-      shift 2
-      ;;
+  -t) # Field separator
+    fsep=$(set_fsep ${2})
+    shift 2
+    ;;
 
-    --left-suffix)
-      left_suffix=$2
-      shift 2
-      ;;
+  --left-prefix)  # Prefix left columns
+    left_prefix=$2
+    shift 2
+    ;;
 
-    --right-prefix)
-      right_prefix=$2
-      shift 2
-      ;;
+  --left-suffix)  # Suffix left columns
+    left_suffix=$2
+    shift 2
+    ;;
 
-    --right-suffix)
-      right_suffix=$2
-      shift 2
-      ;;
+  --right-prefix) # Prefix right columns
+    right_prefix=$2
+    shift 2
+    ;;
 
-    --)
-      shift
-      break
-      ;;
+  --right-suffix) # Suffix right columns
+    right_suffix=$2
+    shift 2
+    ;;
+
+  -h|--help)  # Print help message
+    cat << EOF
+Usage: ${program_name} [OPT] LEFT RIGHT [-- ...]
+
+Join LEFT and RIGHT file on a common field. The join key is defined by column
+names. Therefore both LEFT and RIGHT file must contain a header.
+
+Available flags for OPT:
+  -1, -2, -j FIELD
+    Join LEFT, RIGHT or both files on FIELD
+
+  -d
+    Enable dry-run mode. The backend will not be invoked, but the configured
+    command will be written to standard output.
+
+  -t FS
+    $(fsep_help_message)
+
+  --left-prefix=STR, --left-suffix=STR
+  --right-prefix=STR, --right-suffix=STR
+    Add STD as prefix/suffix to LEFT/RIGHT column names
+
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" "${join_backend}" XJOIN_FLAGS "${default_xjoin_flags}")
+
+Backend: ${join_backend}
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
 # Non-option arguments are input files
-left_file=${1:?Invalid left input}
-shift
+declare -r left_file=${1:?Missing LEFT}
+declare -r right_file=${2:?Missing RIGHT}
+shift 2
 
-right_file=${1:?Invalid right input}
-shift
-
-# Check for double usage of `-'
-[ "-" = $left_file ] && [ "-" = $right_file ] && die -1 "Cannot read left and right data from stdin!"
-
-# # tmpdir=$(mktemp -d "$program_name"".XXXXXX")
-# tmpdir=$(mktemp -d "xjoin.XXXXXX")
-# tmp_left="$tmpdir/left"
-# tmp_right="$tmpdir/right"
-# 
-# touch "$tmp_left"
-# touch "$tmp_right"
-# 
-# #mkfifo "$tmp_left" "$tmp_right"
-# echo "-> $tmp_left -> $tmp_right"
-
-# Open left file
-if [ "-" = "$left_file" ]; then exec 4<&0
-else exec 4< "$left_file"
+# Check for double/invalid usage of `-'
+if [ "-" == "${left_file}" ] && [ "-" == "${right_file}" ]; then
+  die -1 "Cannot read LEFT and RIGHT from stdin!"
 fi
 
-# Open right file
-if [ "-" = "$right_file" ]; then exec 5<&0
-else exec 5< "$right_file"
-fi
+# Internally input files must be mapped to fifos. To keep them unique between
+# multiple instances, a random temporary directory is created as base for the
+# current instance.
+declare -r tmpdir=$(mktemp -d)
 
-# Read headers
+# Open left file as file descriptor(fd) 4:
+#
+# Use xcat to transparently decompress LEFT input into fifo. Afterwards this
+# fifo is connected to fd 4.
+declare -r left_in="${tmpdir}/left_in"
+mkfifo "${left_in}" || die -1 "Cannot create fifo \`${left_in}'!"
+temporary_files+=("${left_in}")
+xcat "${left_file}" > "${left_in}" &
+exec 4< "${left_in}"
+
+# Open right file as file descriptor(fd) 5: See above
+declare -r right_in="${tmpdir}/right_in"
+mkfifo "${right_in}" || die -1 "Cannot create fifo \`${right_in}'!"
+temporary_files+=("${right_in}")
+xcat "${right_file}" > "${right_in}" &
+exec 5< "${right_in}"
+
+# Read headers from LEFT and RIGHT input
 IFS= read -r left_raw_header <&4
 IFS= read -r right_raw_header <&5
 
-# Parse head line into x_fields and x_flags
-parse_header "$left_raw_header" "$fsep" x_left_
-parse_header "$right_raw_header" "$fsep" x_right_
+# Parse header
+# Column names are parsed into x_left_fields and x_right_fields
+parse_header "${left_raw_header}" "${fsep}" x_left_
+parse_header "${right_raw_header}" "${fsep}" x_right_
 
-# Find columns in x_fields and store indices into x_index and x_found
-find_fields x_left_fields[@] x_left_ $left_field
-find_fields x_right_fields[@] x_right_ $right_field
+# Locate left/right_field in corresponding header.
+# Results are stored in x_left/right_index and x_left/right_found
+locate_fields x_left_fields[@] x_left_ "${left_field}"
+locate_fields x_right_fields[@] x_right_ "${right_field}"
 
 # Apply prefix/suffix for left/right
-[ ! -z "$left_prefix" ] && add_prefix_to_fields x_left_fields[@] "$left_prefix" x_left_
-[ ! -z "$left_suffix" ] && add_suffix_to_fields x_left_fields[@] "$left_suffix" x_left_
-[ ! -z "$right_prefix" ] && add_prefix_to_fields x_right_fields[@] "$right_prefix" x_right_
-[ ! -z "$right_suffix" ] && add_suffix_to_fields x_right_fields[@] "$right_suffix" x_right_
+[ -n "${left_prefix}" ] && add_prefix_to_fields x_left_fields[@] "${left_prefix}" x_left_
+[ -n "${left_suffix}" ] && add_suffix_to_fields x_left_fields[@] "${left_suffix}" x_left_
+[ -n "${right_prefix}" ] && add_prefix_to_fields x_right_fields[@] "${right_prefix}" x_right_
+[ -n "${right_suffix}" ] && add_suffix_to_fields x_right_fields[@] "${right_suffix}" x_right_
 
 # Build output header
 # 1. Delete left/right join fields
@@ -117,36 +187,44 @@ if [ 0 -eq ${dry_run:-0} ]; then
   delete_fields_by_index x_left_fields[@] x_left_index[@] x_left_
   delete_fields_by_index x_right_fields[@] x_right_index[@] x_right_
 
-  tmp_left_header=$(join_by x_left_fields[@] "$fsep")
-  tmp_right_header=$(join_by x_right_fields[@] "$fsep")
-  echo "$join_field""$fsep""$tmp_left_header""$fsep""$tmp_right_header"
+  tmp_left_header=$(join_by x_left_fields[@] "${fsep}")
+  tmp_right_header=$(join_by x_right_fields[@] "${fsep}")
+  echo "${join_field}${fsep}${tmp_left_header}${fsep}${tmp_right_header}"
 fi
 
 # Create temporary files for join-program
-tmpdir=$(mktemp -d xjoin_XXXXXX)
-tmp_left="$tmpdir/left"
-tmp_right="$tmpdir/right"
+declare -r left_fifo="${tmpdir}/left"
+declare -r right_fifo="${tmpdir}/right"
 
-mkfifo "$tmp_left"
-mkfifo "$tmp_right"
+mkfifo "${left_fifo}" || die -1 "Cannot create fifo \`${left_fifo}'!"
+temporary_files+=("${left_fifo}")
+
+mkfifo "${right_fifo}" || die -1 "Cannot create fifo \`${right_fifo}'!"
+temporary_files+=("${right_fifo}")
 
 # Connect file descriptors to fifos
-cat <&4 > "$tmp_left" &
-cat <&5 > "$tmp_right" &
+cat <&4 > "${left_fifo}" &
+cat <&5 > "${right_fifo}" &
 
-cmd=$(replace_fsep "$_join" "$fsep")
-cmd+=" --check-order"
-cmd+=" -1$((${x_left_index[0]} + 1))"
-cmd+=" -2$((${x_right_index[0]} + 1))"
+# Configure field-separator in join program
+cmd="${join_backend} -t${fsep}"
 
-# Prepend echo-command for dry-run-mode
-[ 0 -ne ${dry_run:-0} ] && cmd="$_echo ""$cmd"
+# Get column-index for left/right join field
+declare -ri left_no=$((${x_left_index[0]} + 1))
+declare -ri right_no=$((${x_right_index[0]} + 1))
+cmd+=" -1${left_no} -2${right_no}"
 
-# Run join-command and pass options after `--' to join
-$cmd "$tmp_left" "$tmp_right" "$@"
+# Pass input data via fifos
+cmd+=" '${left_fifo}' '${right_fifo}'"
 
-# Close file descriptors and delete temporary fifos
-exec 5>&-
-exec 4>&-
-rm "$tmp_left" "$tmp_right"
-rmdir "$tmpdir"
+# Add non-option arguments and other options
+cmd+=" $@ ${XJOIN_FLAGS:-${default_xjoin_flags}}"
+declare -r cmd
+
+# If dry-run mode is enabled, cmd will only be echoed
+if [ 0 -eq ${dry_run:-0} ]; then eval ${cmd}
+else echo "${cmd}"
+fi
+
+# Report success to shell
+exit 0

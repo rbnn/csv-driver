@@ -1,2 +1,15 @@
-Select rows by values:
-  xawk -- '1 > $_column'
+Select rows by COLUMN values:
+  xawk '1 > %COLUMN%'
+
+Common interface:
+  -d
+    Enable dry-run mode. Only print configured command.
+
+  -f FIELD/LIST
+    Specify field or a comma separated list of fields to process.
+
+  -t FS
+    Use FS as field separator
+
+  -h, --help
+    Print help message

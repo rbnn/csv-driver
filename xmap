@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xmap
+# License:  GPL-3.0
+
+set -e
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r parallel_backend=$(find_program_like ${parallel_like_programs[@]})
+
+declare -r default_xmap_dryrun=no
+declare -r default_xmap_block=2M      # Block-size per job
+declare -r default_xmap_retry=5       # Retry ffailed jobs
+declare -r default_xmap_progress=no   # Print progress information to stderr
+declare -r default_xmap_round=no      # Use round-robin for splitting stdin
+declare -r default_xmap_path=yes      # Export PATH variable to nodes
+declare -r default_xmap_joblog="xmap_$$.log"  # Write job-log into file
+declare -r default_xmap_login="~/.parallel/sshloginfile"    # Use GNU-parallel's default location for the sshloginfile, i.e. ~/.parallel/sshloginfile
+
+# Update environment variables
+declare -r XMAP_DRYRUN=${XMAP_DRYRUN:-${default_xmap_dryrun}}
+declare -r XMAP_PROGRESS=${XMAP_PROGRESS:-${default_xmap_progress}}
+declare -r XMAP_ROUND_ROBIN=${XMAP_ROUND_ROBIN:-${default_xmap_round}}
+declare -r XMAP_PATH=${XMAP_PATH:-${default_xmap_path}}
+declare -r XMAP_JOBLOG=${XMAP_JOBLOG:-${default_xmap_joblog}}
+declare -r XMAP_BLOCK=${XMAP_BLOCK:-${default_xmap_block}}
+declare -r XMAP_RETRY=${XMAP_RETRY:-${default_xmap_retry}}
+declare -r XMAP_LOGIN=${XMAP_LOGIN:-${default_xmap_login}}
+
+# Configure the default options for parallel
+default_xmap_flags=
+default_xmap_flags+=" --pipe"               # Split input on stdin accross nodes
+default_xmap_flags+=" --halt-on-error=2"    # Kill all jobs on first error
+default_xmap_flags+=" --colsep=';'"         # Split input lines on semi-colons
+default_xmap_flags+=" --block=${XMAP_BLOCK}"
+[ "yes" = ${XMAP_PROGRESS} ] && default_xmap_flags+=" --bar"
+[ "yes" = ${XMAP_ROUND_ROBIN} ] && default_xmap_flags+=" --round-robin"
+[ "yes" = ${XMAP_PATH} ] && default_xmap_flags+=" --env PATH"
+[ -n "${XMAP_JOBLOG}" ] && default_xmap_flags+=" --joblog='${XMAP_JOBLOG}'"
+[ -r "${XMAP_LOGIN}" ] && default_xmap_flags+=" --sshloginfile='${XMAP_LOGIN}'"
+[ -n "${XMAP_EXTRA}" ] && default_xmap_flags+=" ${XMAP_EXTRA}"
+[ 0 -lt ${XMAP_RETRY} ] && default_xmap_flags+=" --retries=${XMAP_RETRY}"
+default_xmap_flags+=" ${XMAP_EXTRA}"
+declare -r default_xmap_flags
+
+# default_xmap_flags+=" --cleanup"
+# default_xmap_flags+=" --controlmaster"
+
+
+if [ -z "$*" ] && [ "yes" != "${XMAP_DRYRUN}" ]; then
+  # Help message
+  cat << EOF
+Usage: ${program_name} COMMAND...
+
+Distribute COMMAND across multiple nodes. This resembles the map-part of the
+map-reduce scheme. Data is read from standard input and split into consequtive
+blocks. The header is repeated among all data-blocks. Therefore map-COMMANDs
+also have to read the data from standard input. As all arguments are
+interpreted by COMMAND, ${program_name} has to be configured differently.
+Therefor it is sensitive to environment variables.
+
+Running ${program_name} without COMMAND will show this message and terminate
+successfully.
+
+Available envirnoment variables to change the behaviour of ${program_name}:
+  XMAP_PROGRESS=yes|no    Print progress information to stderr (default: ${default_xmap_progress}).
+  XMAP_ROUND_ROBIN=yes|no Use round-robin to map data lines from standard input
+                          to the COMMANDs (default: ${default_xmap_round}).
+  XMAP_PATH=yes|no        Export PATH variable to all nodes (default: ${default_xmap_path}).
+  XMAP_JOBLOG=[FILE]      Write job status into FILE (default: '${default_xmap_joblog}').
+                          This can be disabled by passing XMAP_JOBLOG="".
+  XMAP_LOGIN=[FILE]       Read list of available remote nodes from FILE (default: ${default_xmap_login}).
+                          If FILE doesn't exist or isn't readable, it will be ignored.
+  XMAP_BLOCK=SIZE         Split data into blocks of SIZE bytes (default: ${default_xmap_block}).
+  XMAP_RETRY=N            Retry failed COMMANDs up to N times (default: ${default_xmap_retry}).
+  XMAP_DRYRUN=yes|no      Do not invoke backend. Only print, how the backend
+                          would be called and terminate successfully (default: ${default_xmap_dryrun}).
+  XMAP_EXTRA              Pass additional backend flags that are added to XMAP_FLAGS.
+  XMAP_FLAGS              Overwrite default backend flags. Please run
+                                \`XMAP_DRYRUN=yes ${program_name}'
+                          for a complete listing of default backend flags.
+
+Backend: ${parallel_backend}
+EOF
+  exit 0
+fi
+
+if [ "yes" = "${XMAP_DRYRUN}" ]; then
+  declare -r raw_header='${header}'
+else
+  # Read header from input
+  IFS= read -r raw_header
+  declare -r raw_header
+fi
+
+# Configure backend command
+cmd=${parallel_backend}
+cmd+="${XMAP_FLAGS:-${default_xmap_flags}}"
+cmd+=" 'xheader --insert=${raw_header} | $@'"
+declare -r cmd
+
+if [ "yes" = "${XMAP_DRYRUN}" ]; then echo "${cmd}"
+else eval ${cmd}
+fi
+
+exit 0

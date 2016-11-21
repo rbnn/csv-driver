@@ -1,128 +1,174 @@
 #!/bin/sh
 
+set -e
 source xbase
+
+declare -r program_name=${0##*/}
+declare -r default_xheader_non_ascii=_
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r fgrep_backend=$(find_program_like ${fgrep_like_programs[@]})
 
 # Initialize default field-separator
 fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
-args=$(getopt -o a:c::dhi:p:r:t:su -l help -n ${0##*/} -- "$@")
-eval set -- "$args"
+declare -r args=$(${getopt_backend} --options=dhi:r:t: \
+  --longoptions=append:,prepend:,help,insert:,replace:,delete,split:,only,ascii::,unique,prefix:,suffix: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
 
 # Parse arguments
 while true; do
-  case $1 in
-    -a)
-      # Append to header
-      append_header=$2
-      shift 2
-      ;;
+  case ${1} in
+  --append)
+    # Append to header
+    append=${2}
+    shift 2
+    ;;
 
-    -p)
-      # Prepend to header
-      prepend_header=$2
-      shift 2
-      ;;
+  --prepend) # Prepend to header
+    prepend=${2}
+    shift 2
+    ;;
 
-    -c)
-      # Make canonical header
-      canonical=${2:-_}
-      shift 2
-      ;;
+  --prefix) # Add prefix
+    prefix=${2}
+    shift 2
+    ;;
 
-    -i)
-      # Insert new header as first line
-      insert_header=$2
-      shift 2
-      ;;
+  --suffix) # Add suffix
+    suffix=${2}
+    shift 2
+    ;;
 
-    -r)
-      # Replace current header
-      replace_header=$2
-      shift 2
-      ;;
+  --ascii) # Make ascii-header
+    non_ascii=${2:-${default_xheader_non_ascii}}
+    shift 2
+    ;;
 
-    -d)
-      # Delete current header
-      delete_header=1
-      shift
-      ;;
+  -i|--insert) # Insert new header as first line
+    insert=${2}
+    shift 2
+    ;;
 
-    -s)
-      # Print current header but don't print data
-      skip_data=1
-      shift
-      ;;
+  -r|--replace) # Replace current header
+    replace=${2}
+    shift 2
+    ;;
 
-    -t)
-      # Change field sepearator (default is comma)
-      fsep=$(set_fsep $2)
-      shift 2
-      ;;
+  -d|--delete) # Delete current header
+    delete=1
+    shift
+    ;;
 
-    -u)
-      # Remove repeated headers
-      unique_header=1
-      shift
-      ;;
+  --split) # Split data into header and body
+    split=${2}
+    shift 2
+    ;;
 
-    -h|--help)
-      cat << EOF
-  -i STR    Insert STR as header
-  -r STR    Replace STR as header
-  -d        Delete header
-  -a STR    Append STR to header
-  -p STR    Prepend STR to header
-  -c        Canonicalize header (only: a-Z0-9_)
-  -t FS     Field separator
-  -s        Skip data
-  -u        Remove repeated header definitions
-  -h|--help Print this message and terminate
+  --only) # Print current header but don't print data
+    only=1
+    shift
+    ;;
+
+  -t) # Change field sepearator (default is comma)
+    fsep=$(set_fsep ${2})
+    shift 2
+    ;;
+
+  --unique) # Remove repeated headers
+    unique=1
+    shift
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Manipulate header of input data.
+
+Available flags for OPT:
+  --append=FIELD
+    Append FIELD to header.
+
+  --prepend=FIELD
+    Prepend FIELD to header.
+
+  --prefix=PREFIX
+    Add PREFIX to field names.
+
+  --suffix=SUFFIX
+    Add SUFFIX to field names.
+    
+  --ascii[=CHAR]
+    Replace all non-ascii characters in header by CHAR (default is \`${default_xheader_non_ascii}').
+
+  -i, --inster=STR
+    Insert STR as header.
+
+  -r, --replace=STR
+    Replace header by STR.
+
+  -d, --delete
+    Delete header.
+
+  --split=FILE
+    Write header to FILE.
+
+  --only
+    Only print header and skip data.
+
+  -t FS
+    $(fsep_help_message)
+
+  --unique
+    Suppress multiple header occurrences.
+
+  -h, --help
+    $(help_help_message)
 EOF
-      exit 0
-      ;;
+    exit 0
+    ;;
 
-    --)
-      shift
-      break
-      ;;
+  --)
+    shift
+    break
+    ;;
   esac
 done
 
-# Insert header
-if [ ! -z "$insert_header" ]; then
-  raw_header=$insert_header
-else
-  # Consume exsiting header
-  IFS= read -r raw_header
+declare -r insert
+declare -r replace
+
+# Insert header or read from input
+if [ -n "${insert}" ]; then raw_header="${insert}"
+else IFS= read -r raw_header
 fi
 
 # Replace header
-if [ ! -z "$replace_header" ]; then
-  raw_header=$replace_header
-fi
+[ -n "${replace}" ] && raw_header="${replace}"
 
-[ ! -z "$prepend_header" ] && raw_header="$prepend_header""$fsep""$raw_header"
-[ ! -z "$append_header" ] && raw_header="$raw_header""$fsep""$append_header"
+# Make ascii-header, i.e. replace non-ascii characters by `_'
+[ -n "${non_ascii}" ] && raw_header=$(tr -c "[[:alnum:]${fsep}\n]" "${non_ascii}" <<< "${raw_header}")
+declare -r raw_header
 
-# Make canonical header
-if [ ! -z "$canonical" ]; then
-  # Replace characters other than characters, digits or field-separator
-  raw_header=$(tr -c "[[:alnum:]${fsep}\n]" "${canonical}" <<< "$raw_header")
-fi
+parse_header "${raw_header}" "${fsep}" x_
+[ -n "${prepend}" ] && x_fields=("${prepend}" "${x_fields[@]}")
+[ -n "${append}" ] && x_fields=("${x_fields[@]}" "${append}")
+
+[ -n "${prefix}" ] && add_prefix_to_fields x_fields[@] "${prefix}" x_
+[ -n "${suffix}" ] && add_suffix_to_fields x_fields[@] "${suffix}" x_
 
 # Delete header
-if [ 0 -ne ${delete_header:-0} ]; then
-  raw_header=""
-fi
-
-if [ 0 -eq ${delete_header:-0} ]; then
-  echo $raw_header
-fi
+[ 0 -eq ${delete:-0} ] && echo "$(join_by x_fields[@] ,)"
+[ -n "${split}" ] && echo "$(join_by x_fields[@] ,)" > "${split}"
 
 # Skip remaining data
-if [ 0 -eq ${skip_data:-0} ]; then
-  if [ 0 -eq ${unique_header:-0} ]; then cat
-  else fgrep -v "$raw_header"
+if [ 0 -eq ${only:-0} ]; then
+  if [ 0 -eq ${unique:-0} ]; then cat
+  else ${fgrep_backend} -v "$(join_by x_fields[@] ,)"
   fi
 fi
+
+# Report success to shell
+exit 0

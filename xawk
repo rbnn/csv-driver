@@ -1,0 +1,244 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xawk2
+# License:  GPL-3.0
+
+function clean_up()
+{
+  #{{{
+  # Delete temporary files
+  for file in "${temporary_files[@]}"; do rm -f "${file}"; done
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
+
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r default_xawk_flags=
+declare -r default_xawk_prefix='%'
+declare -r default_xawk_suffix='%'
+declare -r default_xawk_pattern='[A-Za-z_][A-Za-z0-9_]*'
+declare -r awk_backend=$(find_program_like ${awk_like_programs[@]})
+declare -r egrep_backend=$(find_program_like ${egrep_like_programs[@]})
+declare -r sed_backend=$(find_program_like ${sed_like_programs[@]})
+declare -a temporary_files
+
+# Define pattern for valid column names
+awk_column_regex=${default_xawk_pattern}
+awk_column_prefix=${default_xawk_prefix}
+awk_column_suffix=${default_xawk_suffix}
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(getopt --options=t:hHEdD \
+  --longoptions=help,prefix:,suffix:,pattern: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -t) # Field separator
+    fsep=$(set_fsep ${2})
+    shift 2
+    ;;
+
+  -H) # Suppress header in output
+    no_header=1
+    shift
+    ;;
+
+  -E) # Feed header to command
+    exec_header=1
+    shift
+    ;;
+
+  -d) # Enable basic dry-run mode
+    dry_run=1
+    shift
+    ;;
+
+  -D) # Enable extended dry-run mode
+    dry_run=2
+    shift
+    ;;
+
+  --prefix) # Change column-name prefix
+    awk_column_prefix=$2
+    shift 2
+    ;;
+
+  --suffix) # Change column-name suffix
+    awk_column_suffix=$2
+    shift 2
+    ;;
+
+  --pattern) # Change column-name pattern
+    awk_column_regex=$2
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT] FILE [-- ...]
+       ${program_name} [OPT] PROGRAM... [-- ...]
+
+${program_name} executes awk-scripts after translating column names into column
+numbers. Therefore ${program_name} reads the header information from stdin. The
+header information is taken from the first line presented via stdin and is split
+on occurrences of FS. It automatically checks, that all requested columns are
+found in the header. On success ${program_name} replaces all occurences of a
+column-name by its corresponding index and executes the resulting program. On
+error ${program_name} fails with an error message.
+
+Available flags for OPT:
+  -t FS
+    $(fsep_help_message)
+
+  -d
+    Enable basic dry-run mode. The backend will not be invoked, but the
+    configured command will be written to standard output.
+
+  -D
+    Enable extended dry-run mode. The backend will not be invoked, but the
+    resulting awk-script will be written to standard output.
+
+  -H
+    Suppress header in final output.
+  -E
+    Insert header into data stream
+
+  --pattern=EXPR, --prefix=EXPR, --suffix=EXPR
+    Overwrite regular expressions for column names, prefix or suffix.
+    Defaults are:
+      pattern='${default_xawk_pattern}'
+      prefix='${default_xawk_prefix}'
+      suffix='${default_xawk_suffix}'
+
+  -h, --help
+    $(help_help_message)
+
+Column names
+${program_name} uses extended regular expressions to identify column names within the
+awk-script. Therefore column names must match <PREFIX><PATTERN><SUFFIX>.
+
+$(getopt_help_message "${program_name}" "${awk_backend}" XAWK_FLAGS "${default_xawk_flags}")
+
+Backend: ${awk_backend}
+EOF
+      shift
+      exit 0
+      ;;
+ 
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+# Full pattern to identify column names within AWK-scripts
+declare -r awk_variable_pattern="${awk_column_prefix}${awk_column_regex:?Invalid variable pattern}${awk_column_suffix}"
+
+# Check, whether given argument is an awk-script-file. Otherwise dump all
+# arguments into a temporary file. This allows passing awk-program directly via
+# command line.
+if [ -r "${1:?Missing program or file}" ]; then
+  # The first argument is an awk-script-file
+  declare -r awk_in_file="${1}"
+  shift
+
+else
+  # Dump program passed via command line into temporary file.
+  declare -r awk_in_file=$(mktemp)
+  temporary_files+=("${awk_in_file}")
+  echo "$@" > "${awk_in_file}"
+  shift $#
+
+fi
+
+# Input/Output script
+declare -r awk_out_file=$(mktemp)
+temporary_files+=("${awk_out_file}")
+
+# Find all column names in AWK-script
+declare -ra code_symbols=($(xcomment < "${awk_in_file}" | ${egrep_backend} -o "${awk_variable_pattern}" | sort | uniq))
+declare -a fields
+
+# Set input field separator from variable or default
+IFS= read -r raw_header
+ 
+# Parse head line into x_fields and x_flags
+parse_header "${raw_header}" "${fsep}" x_
+
+if [ 0 -ne ${#code_symbols[@]} ]; then
+  # Try resolving columns only if, any could be found in the original script.
+  # This branch is skipped if no variables were found.
+  for sym in "${code_symbols[@]}"; do
+    tmp=$(${egrep_backend} -o "${awk_column_regex}" <<< ${sym})
+    fields+=("${tmp}")
+
+  done
+  
+  # Find columns in x_fields and store indices into x_index and x_found
+  locate_fields x_fields[@] x_ ${fields[@]}
+  
+  [ 1 -eq ${dry_run:-0} ] && echo "Column name replacements:"
+
+  # Calculate arguments for
+  declare -a sed_args
+  for ((i = 0; i < ${#x_index[@]}; i += 1)); do
+    sym=${code_symbols[$i]:?Invalid symbol}
+    # Escape `$' by `\$' for sed-expression
+    pat=${sym//\$/\\\$}
+    idx=${x_index[$i]:?Invalid index}
+    num=$((idx + 1))
+  
+    # Print replacements, if in dry-run mode
+    [ 1 -eq ${dry_run:-0} ] && echo "${i}: ${sym} --> ${idx}"
+  
+    # Generate a sed-expression for every column name.
+    # This expression will replace the column name by its column index.
+    sed_args+=("-e s/${pat}/\$${num}/g")
+  done
+  
+  # Search & replace column names in AWK-script
+  ${sed_backend} "${sed_args[@]}" "${awk_in_file}" > "${awk_out_file}"
+else
+  cat "${awk_in_file}" > "${awk_out_file}"
+fi
+  
+# Execute AWK-script
+cmd="${awk_backend} -F${fsep} -v OFS=${fsep} -f '${awk_out_file}'"
+
+# Add non-option arguments and other options
+cmd+=" $@ ${XAWK_FLAGS:-${default_xawk_flags}}"
+declare -r cmd
+
+# Execute command & script
+if [ 0 -lt ${dry_run:-0} ]; then
+  # Don't execute anything. Only print the command
+  [ 1 -eq ${dry_run:-0} ] && echo "${cmd}"
+
+  # Don't execute anything. Only print the parsed script
+  [ 1 -lt ${dry_run:-0} ] && cat "${awk_out_file}"
+
+else
+  # Optionally prepend(default) or suppress header to output
+  [ 0 -eq ${no_header:-0} ] && echo "${raw_header}"
+
+  # Optionally insert header into body (not default)
+  if [ 0 -eq ${exec_header:-0} ]; then cat
+  else (echo ${raw_header} && cat)
+  fi | eval ${cmd}
+fi
+
+# Report success to shell
+exit 0

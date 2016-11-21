@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xfind
+# License:  GPL-3.0
+
+set -e
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -a fields
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(${getopt_backend} --options=f:ht: \
+  --longoptions=help \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -f) # Select fields
+    IFS=, read -r -a tmp_field <<< "${2}"
+    fields=("${fields[@]}" "${tmp_field[@]}")
+    shift 2
+    ;;
+
+  -t) # Field separator
+    fsep=$(set_fsep ${2})
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Locate fields in header read from standard input.
+
+Available flags for OPT:
+  -f FIELDS
+    Locate FIELDS, which might be a single field name or a comma separated list
+    of field names.
+
+  -t FS
+    $(fsep_help_message)
+
+  -h, --help
+    $(help_help_message)
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+# Set input field separator from variable or default
+IFS= read -r raw_header
+
+# Parse head line into x_fields and x_flags
+parse_header "$raw_header" "${fsep}" x_
+locate_fields x_fields[@] x_ "${fields[@]}"
+
+for((idx = 0; idx < ${#x_index[@]}; idx += 1)); do echo "${x_index[${idx}]}:${x_fields[${idx}]}"; done
+exit 0

@@ -1,72 +1,171 @@
-#!/bin/sh
+#!/bin/bash
 
-# source xbase
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xfillna
+# License:  GPL-3.0
 
-program_name=${0##*/}
-usage_message="Invalid usage! See \`$program_name --help' for help."
-
-# Parse command line arguments and feed parsed arguments
-args=$(getopt -o dhf:p:v: -l help -n ${0##*/} -- "$@")
-eval set -- "$args"
-
-pattern="nan"
-value=0
-
-# Parse arguments
-while true; do
-  case $1 in
-    -d)
-      dry_run=1
-      shift
-      ;;
-      
-    -h|--help)
-      cat << EOF
-  -d      Dry run
-  -f STR  Field name
-  -p STR  Pattern for empty fields
-  -v VAL  Replace NaNs by VAL
-  -h|--help
-EOF
-      shift
-      exit 0
-      ;;
-
-    -f)
-      field=${2:?Invalid field name}
-      shift 2
-      ;;
-
-    -p)
-      # Update empty-pattern
-      pattern=${2}
-      shift 2
-      ;;
-
-    -v)
-      # Replace-value
-      value=${2}
-      shift 2
-      ;;
-
-    --)
-      shift
-      break
-      ;;
-  esac
-done
-
-tmp_program=$(mktemp xfillna.XXXXXX)
-cat << EOF > "$tmp_program"
+# Usage: generateFillNaProgram FIELD PATTERN [VALUE]
+function generateFillNaProgram()
 {
-  if("$pattern" == \$_$field) {
-    \$_$field = "$value";
+  #{{{
+  local -r field=${1:?Missing FIELD}
+  local -r pattern=${2:?Missing PATTERN}
+  local -r value=${3:-0}
+
+  cat << EOF
+{
+  if (%${field}% ~ /${pattern}/) {
+    %${field}% = ${value};
   }
 
   print \$0;
 }
 EOF
+  #}}}
+}
 
-xawk -- -f "$tmp_program"
+function clean_up()
+{
+  #{{{
+  # Delete temporary files
+  for file in "${temporary_files[@]}"; do rm -f "${file}"; done
+  #}}}
+}
 
-rm "$tmp_program"
+set -e
+trap clean_up 0 # EXIT-signal
+
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r default_xfillna_nan='^[Nn][Aa][Nn]$'
+declare -r default_xfillna_inf='[Ii][Nn][Ff]([Ii][Nn][Ii][Tt][Yy])?$'
+declare -r default_xfillna_field=value
+declare -r default_xfillna_pattern="${default_xfillna_nan}"
+declare -r default_xfillna_value=0
+declare -r default_xfillna_flags=
+declare -a temporary_files
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(${getopt_backend} --options=df:ht: \
+  --longoptions=help,pattern:,value:,inf:: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -d) # Enable dry-run mode
+    dry_run=1
+    shift
+    ;;
+
+  -f) # Fill field
+    user_field=${2}
+    shift 2
+    ;;
+
+  -t) # Field separator
+    fsep=$(set_fsep $2)
+    shift 2
+    ;;
+
+  --pattern) # Fill pattern
+    user_pattern=${2}
+    shift 2
+    ;;
+
+  --inf)
+    case ${2} in
+    0) user_pattern="^${default_xfillna_inf}" ;;
+    +) user_pattern="^[+]?${default_xfillna_inf}" ;;
+    -) user_pattern="^[-]${default_xfillna_inf}" ;;
+    +-|-+) user_pattern="^[+-]${default_xfillna_inf}" ;;
+    *) user_pattern="^[+-]?${default_xfillna_inf}" ;;
+    esac
+    shift 2
+    ;;
+
+  --value) # Fill value
+    user_value=${2}
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT]
+
+Insert missing data.
+
+Available flags for OPT:
+  -d
+    Enable dry-run mode. The xawk not be invoked, but the configured command
+    will be written to standard output.
+
+  -f FIELD
+    Check FIELD for missing data (default is \`${default_xfillna_field}').
+
+  -t FS
+    $(fsep_help_message)
+
+  --pattern=EXPR
+    Identify field values matching EXPR as missing data (default is \`${default_xfillna_pattern}').
+
+  --inf[=FLAG]
+    Identify infinite values as missing data. A value is considered infinite if
+    it compares equally to the strings \`inf' or \`infinity'
+    (cases-IN-sensitive). This is equivalent to setting \`--pattern'
+    appropriately. FLAG controls, how the sign of the value is considered:
+      0   Values must be unsigned, i.e. NO \`+/-'-prefix
+      +   Prefix \`+' is optional
+      -   Prefix \`-' is required
+      +-  Prefix \`+' or \`-' is required
+      -+  Equivalent to \`+-'
+    By default the prefix \`+' or \`-' is optional.
+
+  --value=VALUE
+    Replace missing data by VALUE (default is \`${default_xfillna_value}').
+
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" xawk XFILLNA_FLAGS "${default_xfillna_flags}")
+
+Backend: $(which xawk)
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+declare -r fillna_program=$(mktemp)
+temporary_files+=("${fillna_program}")
+
+declare -r user_field=${user_field:-${default_xfillna_field}}
+declare -r user_pattern=${user_pattern:-${default_xfillna_pattern}}
+declare -r user_value=${user_value:-${default_xfillna_value}}
+
+generateFillNaProgram "${user_field}" "${user_pattern}" "${user_value}" > "${fillna_program}"
+
+cmd="xawk -t${fsep} --prefix=% --suffix=% '${fillna_program}'"
+cmd+=" $@ ${XFILLNA_FLAGS:-${default_xfillna_flags}}"
+declare -r cmd
+
+# If dry-run mode is enabled, cmd will only be echoed
+if [ 0 -eq ${dry_run:-0} ]; then eval "${cmd}"
+else echo "${cmd}"
+fi
+
+# Report success to shell
+exit 0

@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xsplit
+# License:  GPL-3.0
+
+set -e
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r default_xsplit_flags=
+declare -r egrep_backend=$(find_program_like ${egrep_like_programs[@]})
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r sed_backend=$(find_program_like ${sed_like_programs[@]})
+declare -r split_backend=$(find_program_like ${split_like_programs[@]})
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(${getopt_backend} --options=dhl:n: \
+  --longoptions=help,lines:,files:,prefix:,suffix: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -d)
+    dry_run=1
+    shift
+    ;;
+
+  -l|--lines)
+    lines_per_file=${2}
+    shift 2
+    ;;
+
+  -n|--files)
+    total_num_files=${2}
+    shift 2
+    ;;
+
+  --prefix)
+    prefix=${2}
+    shift 2
+    ;;
+
+  --suffix)
+    suffix=${2}
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT] [-- ...]
+
+Split data from standard input and add the header to each split file. The
+resulting filenames are written to standard output.
+
+Available flags for OPT:
+  -d
+    Enable dry-run mode. The backend will not be invoked, but the configured
+    command will be written to standard output.
+
+  -l, --lines=N
+    Split data into files with at most N lines (excluding header).
+
+  -n, --files=N
+    Split data across N files (using the round-robbin scheme).
+
+  --prefix=PREFIX
+    Add PREFIX to output filenames.
+
+  --suffix=SUFFIX
+    Add SUFFIX to output filenames. This comes in handy, as the output files
+    are piped to xcompress. Thus \`--suffix=.gz' will compress output files
+    using a gzip-like compression algorithm.
+    
+  -h, --help
+    $(help_help_message)
+
+$(getopt_help_message "${program_name}" "${split_backend}" XSPLIT_FLAGS "${default_xsplit_flags}")
+
+Backend: ${split_backend}
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+# Read first row and keep stdin open
+IFS= read -r raw_header
+declare -r raw_header
+
+# Generate output filename
+filename="\$FILE"
+[ -n "${file_type}" ] && filename+=".${file_type}"
+declare -r filename
+
+declare -r split_mode=$(
+if [ 0 -lt ${lines_per_file:-0} ]; then echo "--lines=${lines_per_file}"
+elif [ 0 -lt ${total_num_files:-0} ]; then echo "--number=r/${total_num_files}"
+fi)
+
+cmd="${split_backend} --verbose"
+cmd+=" ${split_mode}"
+cmd+=" --filter='xheader --insert=\"${raw_header}\" | xcompress \$FILE'"
+[ -n "${suffix}" ] && cmd+=" --additional-suffix='${suffix}'"
+cmd+=" - ${prefix}"
+cmd+=" $@ ${XSPLIT_FLAGS:-${default_xsplit_flags}}"
+declare -r cmd
+
+if [ 0 -eq ${dry_run:-0} ]; then
+  eval ${cmd} \
+    | ${egrep_backend} -o 'FILE=.*$' \
+    | ${sed_backend} -e 's/^FILE=.//' -e 's/.$//'
+else
+  # If dry-run mode is enabled, cmd will only be echoed
+  echo "${cmd}"
+fi
+
+# Report success to shell
+exit 0

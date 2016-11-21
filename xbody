@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xbody
+# License:  GPL-3.0
+
+set -e
+source xbase
+
+declare -r program_name=${0##*/}
+
+if [ -z "$*" ]; then
+  # Help message
+  cat << EOF
+Usage: ${program_name} COMMAND [ARGUMENTS]
+
+Run COMMAND with ARGUMENTS for body content only. Therefor ${program_name} will
+read the header from standard input an add it directly to standard output. The
+remaining content is then passed to COMMAND. As all arguments are interpreted
+by COMMAND, ${program_name} has to be configured differently. Therefor it is
+sensitive to environment variables.
+
+Running ${program_name} without COMMAND and ARGUMENTS will show this message
+and terminate successfully.
+
+Available envirnoment variables to change the behaviour of ${program_name}:
+  XBODY_DRYRUN    Set this variable non-zero to prevent ${program_name} from
+                  invoking COMMAND. It will only print COMMAND and ARGUMENTS to
+                  standard output and terminate afterwards.
+  XBODY_NO_HEADER Set this variable non-zero to prevent ${program_name} from
+                  adding the header to the output.
+EOF
+  exit 0
+fi
+
+# Read header from input
+IFS= read -r raw_header
+declare -r raw_header
+
+[ -n "${XBODY_FILE}" ] && echo "${raw_header}" > "${XBODY_FILE}"
+
+# If dry-run mode is enabled, cmd will only be echoed
+if [ 0 -eq ${XBODY_DRYRUN:-0} ]; then
+  [ 0 -eq ${XBODY_NO_HEADER:-0} ] && echo "${raw_header}"
+  $@
+else echo "$@"
+fi
+
+# Report success to shell
+exit 0

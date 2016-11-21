@@ -1,58 +1,27 @@
-#!/bin/sh
+#!/bin/bash
 
-source xbase
+# Author:   Ronny Biemann
+#           Copyright 2016
+# File:     xdigit
+# License:  GPL-3.0
 
-# Initialize default field-separator
-fsep=$(set_fsep)
+function clean_up()
+{
+  #{{{
+  for file in "${temporary_files[@]}"; do rm -f "${file}" 2> /dev/null; done
+  #}}}
+}
 
-# Parse command line arguments and feed parsed arguments
-args=$(getopt -o ht:x:y: -l help -n ${0##*/} -- "$@")
-eval set -- "$args"
+# Usage: generatePearsonRProgram X Y [PREDICATE]
+function generatePearsonRProgram()
+{
+  #{{{
+  x=${1:?Missing X}
+  y=${2:?Missing Y}
+  # Data predicate
+  predicate=${3:-""}
 
-while true; do
-  case $1 in
-    -t)
-      # Change field sepearator (default is comma)
-      fsep=$(set_fsep $2)
-      shift 2
-      ;;
-
-    -x)
-      # Use column for x-data
-      with_x=${2:?Invalid field name}
-      shift 2
-      ;;
-
-    -y)
-      # Use column for y-data
-      with_y=${2:?Invalid field name}
-      shift 2
-      ;;
-
-    -h|--help)
-      cat << EOF
-Calculate pearson r_xy
-EOF
-      shift
-      exit 0
-      ;;
-
-    --)
-      shift
-      break
-      ;;
-      
-  esac
-done
-
-# Read input file
-# If no input file is given, read from stdin
-data=${1:--}
-shift
-
-# Create temporary file for awk-program
-awk_program=$(mktemp "${0##*/}".XXXXXX)
-cat << EOF > "$awk_program"
+  cat << EOF
 BEGIN {
   n = 0;
   sum_x = 0.;
@@ -62,27 +31,130 @@ BEGIN {
   sum_yy = 0.;
 }
 
-{
-  x_i = \$_${with_x:?Missing x data};
-  y_i = \$_${with_y:?Missing y data};
-
+${predicate} {
   n += 1;
-  sum_x += x_i;
-  sum_y += y_i;
-  sum_xy += x_i * y_i;
-  sum_xx += x_i ^ 2;
-  sum_yy += y_i ^ 2;
+  sum_x += %${x}%;
+  sum_y += %${y}%;
+  sum_xy += %${x}% * %${y}%;
+  sum_xx += %${x}% ^ 2;
+  sum_yy += %${y}% ^ 2;
 }
 
 END {
   num = n * sum_xy - sum_x * sum_y;
-  den = sqrt((n * sum_xx - sum_x ^ 2) * (n * sum_yy - sum_y ^ 2));
+  denx = sqrt(n * sum_xx - sum_x ^ 2);
+  deny = sqrt(n * sum_yy - sum_y ^ 2);
+  den = denx * deny;
   print num / den;
 }
 EOF
+  #}}}
+}
+
+set -e
+trap clean_up 0 # EXIT-signal
+
+source xbase
+
+declare -r program_name=${0##*/}
+declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
+declare -r default_xpearson_x=x
+declare -r default_xpearson_y=y
+declare -r default_xpearson_predicate=
+declare -r default_xpearson_flags=
+declare -a temporary_files
+
+# Initialize default field-separator
+fsep=$(set_fsep)
+
+# Parse command line arguments and feed parsed arguments
+declare -r args=$(${getopt_backend} --options=ht:x:y: \
+  --longoptions=help,where: \
+  --name="${program_name}" -- "$@")
+eval set -- "${args}"
+
+# Parse arguments
+while true; do
+  case ${1} in
+  -t) # Field separator
+    fsep=$(set_fsep $2)
+    shift 2
+    ;;
+
+  -x) # Use column for x-data
+    user_x=${2}
+    shift 2
+    ;;
+
+  -y) # Use column for y-data
+    user_y=${2}
+    shift 2
+    ;;
+
+  --where) # Set predicate for input data
+    user_predicate=${2}
+    shift 2
+    ;;
+
+  -h|--help)
+    cat << EOF
+Usage: ${program_name} [OPT] [-- ...]
+
+Calculate pearson correlation coefficient for two columns x and y.
+
+Available flags for OPT:
+  -t FS 
+    $(fsep_help_message FS)
+
+  -x FIELD
+    Read x from FIELD (default is \`${default_xpearson_x}')
+
+  -y FIELD
+    Read y from FIELD (default is \`${default_xpearson_y}')
+
+  --where=PREDICATE
+    Only correlate rows, with matching PREDICATE (default is \`${default_xpearson_predicate}')..
+
+  -h, --help
+    $(help_help_message)
+
+PREDICATES
+  Predicates are directly used as predicates for awk-rules. These are fed to
+  xawk, thus accessing FIELD via %FIELD% is valid. By default all rows match
+  an empty predicate.
+
+$(getopt_help_message "${program_name}" xawk XPEARSON_FLAGS "${default_xpearson_flags}")
+
+Backend: $(which xawk)
+EOF
+    shift
+    exit 0
+    ;;
+
+  --)
+    shift
+    break
+    ;;
+  esac
+done
+
+# Read input file
+# If no input file is given, read from stdin
+declare -r data_file=${1:--}
+shift
+
+# Create temporary file for awk-program
+declare -r awk_program=$(mktemp)
+temporary_files+=("${awk_program}")
+
+declare -r user_x=${user_x:-${default_xpearson_x}}
+declare -r user_y=${user_y:-${default_xpearson_y}}
+declare -r user_predicate=${user_predicate:-${default_xpearson_predicate}}
+generatePearsonRProgram "${user_x}" "${user_y}" "${user_predicate}" > "${awk_program}"
 
 # Print data file either by name or from stdin.
-cat "$data" \
-  | xawk -H -t "$fsep" -- -f "$awk_program"
+xcat "${data_file}" \
+  | xawk -H -t${fsep} --prefix=% --suffix=% "${awk_program}" $@ "${XPEARSON_FLAGS:-${default_xpearson_flags}}"
 
-rm "$awk_program"
+# Report success to shell
+exit 0
