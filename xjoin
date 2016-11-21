@@ -209,8 +209,10 @@ locate_fields x_right_fields[@] x_right_ "${right_field}"
 # 1. Delete left/right join fields
 # 2. Prepend left join field to the output
 if [ 0 -eq ${dry_run:-0} ]; then
+  declare -r join_field=${x_left_fields[${x_left_index[0]}]}
+  delete_fields_by_index x_left_fields[@] x_left_index[@] x_left_
   delete_fields_by_index x_right_fields[@] x_right_index[@] x_right_
-  full_header=(${x_left_fields[@]} ${x_right_fields[@]})
+  full_header=("${join_field}" ${x_left_fields[@]} ${x_right_fields[@]})
   echo "$(join_by full_header[@] ${fsep})"
 fi
 
