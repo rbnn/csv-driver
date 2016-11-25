@@ -13,7 +13,7 @@ fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
 declare -r args=$(${getopt_backend} --options=dhi:r:t: \
-  --longoptions=append:,prepend:,help,insert:,replace:,delete,split:,only,ascii::,unique,prefix:,suffix: \
+  --longoptions=append:,prepend:,help,insert:,replace:,delete,split:,only::,ascii::,unique,prefix:,suffix: \
   --name="${program_name}" -- "$@")
 eval set -- "${args}"
 
@@ -67,8 +67,11 @@ while true; do
     ;;
 
   --only) # Print current header but don't print data
-    only=1
-    shift
+    case ${2} in
+    list) only=list ;;
+    *)    only=yes ;;
+    esac
+    shift 2
     ;;
 
   -t) # Change field sepearator (default is comma)
@@ -115,8 +118,10 @@ Available flags for OPT:
   --split=FILE
     Write header to FILE.
 
-  --only
-    Only print header and skip data.
+  --only[=list]
+    Only print header and skip data. If \`list' is given, then the header
+    fields will be printet line by line. Otherwise a single head line is
+    printed.
 
   -t FS
     $(fsep_help_message)
@@ -159,12 +164,14 @@ parse_header "${raw_header}" "${fsep}" x_
 [ -n "${prefix}" ] && add_prefix_to_fields x_fields[@] "${prefix}" x_
 [ -n "${suffix}" ] && add_suffix_to_fields x_fields[@] "${suffix}" x_
 
-# Delete header
-[ 0 -eq ${delete:-0} ] && echo "$(join_by x_fields[@] ,)"
+# Delete header (better: Don't delete header)
+[ 0 -eq ${delete:-0} ] && ( [ "list" != "${only}" ] \
+  && echo "$(join_by x_fields[@] ,)" \
+  || printf "%s\n" "${x_fields[@]}" )
 [ -n "${split}" ] && echo "$(join_by x_fields[@] ,)" > "${split}"
 
 # Skip remaining data
-if [ 0 -eq ${only:-0} ]; then
+if [ "no" == "${only:-no}" ]; then
   if [ 0 -eq ${unique:-0} ]; then cat
   else ${fgrep_backend} -v "$(join_by x_fields[@] ,)"
   fi
