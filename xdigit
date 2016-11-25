@@ -29,9 +29,13 @@ function generateDigitizeProgram()
 
   cat << EOF
 1 == NR {
-  lower = %%${_bins}%%;
-  print "(%${_field}% ${_compare[0]} lower) { print \$0, 0; next }";
-  class = 1;
+  class= 0;
+  upper = %%${_bins}%%;
+
+  print "(%${_field}% ${_compare[1]} "upper") { print \$0, "class"; next }";
+
+  lower = upper;
+  class = +1;
 }
 
 1 < NR {
@@ -43,9 +47,7 @@ function generateDigitizeProgram()
   class += 1;
 }
 
-END {
-  print "("upper" ${_compare[1]} %${_field}%) { print \$0, "class"; next }";
-}
+END { print "("upper" ${_compare[1]} %${_field}%) { print \$0, "class"; next }"; }
 EOF
   #}}}
 }
