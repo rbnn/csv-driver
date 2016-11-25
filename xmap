@@ -12,7 +12,7 @@ declare -r program_name=${0##*/}
 declare -r parallel_backend=$(find_program_like ${parallel_like_programs[@]})
 
 declare -r default_xmap_dryrun=no
-declare -r default_xmap_block=2M      # Block-size per job
+declare -r default_xmap_block=200M    # Block-size per job
 declare -r default_xmap_retry=5       # Retry ffailed jobs
 declare -r default_xmap_progress=no   # Print progress information to stderr
 declare -r default_xmap_round=no      # Use round-robin for splitting stdin
