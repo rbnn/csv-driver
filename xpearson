@@ -2,7 +2,7 @@
 
 # Author:   Ronny Biemann
 #           Copyright 2016
-# File:     xdigit
+# File:     xpearson
 # License:  GPL-3.0
 
 function clean_up()
@@ -138,11 +138,6 @@ EOF
   esac
 done
 
-# Read input file
-# If no input file is given, read from stdin
-declare -r data_file=${1:--}
-shift
-
 # Create temporary file for awk-program
 declare -r awk_program=$(mktemp)
 temporary_files+=("${awk_program}")
@@ -152,9 +147,7 @@ declare -r user_y=${user_y:-${default_xpearson_y}}
 declare -r user_predicate=${user_predicate:-${default_xpearson_predicate}}
 generatePearsonRProgram "${user_x}" "${user_y}" "${user_predicate}" > "${awk_program}"
 
-# Print data file either by name or from stdin.
-xcat "${data_file}" \
-  | xawk -H -t${fsep} --prefix=% --suffix=% "${awk_program}" $@ "${XPEARSON_FLAGS:-${default_xpearson_flags}}"
+xawk -H -t${fsep} --prefix=% --suffix=% "${awk_program}" $@ "${XPEARSON_FLAGS:-${default_xpearson_flags}}"
 
 # Report success to shell
 exit 0
