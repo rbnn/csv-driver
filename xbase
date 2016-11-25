@@ -6,17 +6,24 @@
 # License:  GPL-3.0
 
 # Dependencies:
-# bash (required)
-# coreutils (required)
-# grep (required)
-# sed (required)
-# util-linux  (optional)
+#   bash (required)
+#   coreutils (required)
+#   grep (required)
+#   sed (required)
+#   util-linux  (optional)
+
+set -e
+trap on_exit_execute_cleanup_stack 0 # EXIT-signal
 
 export enable_debug=no
 export enable_debug_location=yes
 export enable_call_stack=yes
+export enable_warning=yes
 export enable_warning_location=yes
 declare -r default_field_separator=,
+
+# Array to hold commands, that shall be executed on exit
+declare -a cleanup_stack
 
 # Register process ID of top-level shell. This is required to allow the
 # die-function to globally abort the current program. Otherwise only the
@@ -37,7 +44,14 @@ declare -ar sed_like_programs=("sed")
 declare -ar split_like_programs=("split")
 declare -ar sort_like_programs=("sort")
 
-# Write debugging MESSAGE to stderr
+# ----------------------
+# -- Output functions --
+# ----------------------
+
+# Write debugging MESSAGE to stderr. The output is controlled by the variables
+# enable_debug and enable_debug_location. If enable_debug evaluates to a value
+# other than yes, the output of the message is suppressed. Setting
+# enable_debug_location to yes adds the current stack location to the output.
 #
 # Usage: debug MESSAGE...
 function debug()
@@ -55,12 +69,16 @@ function debug()
   #}}}
 }
 
-# Write MESSAGE to stderr
+# Write MESSAGE to stderr. This function is similar to debug. Like debug it is
+# controlled by enable_warning and enable_warning_location.
 #
 # Usage: warning MESSAGE...
 function warning()
 {
   #{{{
+  # Skip all execution when warning is off
+  [ "yes" != "${enable_warning}" ] && return
+
   case "${enable_warning_location:-no}" in
   yes) declare -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
   *) declare -r location="" ;;
@@ -75,15 +93,15 @@ function warning()
 # be enabled by setting `enable_call_stack' to `yes'. This will only be
 # ignored, if the column-program from util-linux package isn't installed.
 # 
-# Usage: die CODE MESSAGE...
+# Usage: die [CODE [MESSAGE...]]
 function die()
 {
   #{{{
-  return_code=${1:?Missing CODE}
-  shift
+  return_code=${1:-1}
+  shift || true
 
   # Suppress printing call-stack, if column program (linux-utils) isn't found
-  if [ "yes" = "${enable_call_stack:-no}" ] && [ -x "$(which column)" ]; then
+  if [ "yes" = "${enable_call_stack:-no}" ]; then
     echo "Call stack:" >&2
 
     # Print all frame on call-stack to stderr
@@ -92,7 +110,7 @@ function die()
       | (printf "frame\tline\tfunction\tfile\n"; nl) \
       | column --table \
       | sed -e 's/^/  /' >&2
-  fi
+  fi | pretty_table " "
 
   echo "Error: $@" >&2
 
@@ -133,6 +151,7 @@ function help_help_message()
 # Usage: getopt_help_message PROGRAM BACKEND VARIABLE [DEFAULT_FLAGS]
 function getopt_help_message()
 {
+  #{{{
   local -r program=${1:?Missing PROGRAM}
   local -r backend=${2:?Missing BACKEND}
   local -r variable=${3:?Missing VARIABLE}
@@ -147,24 +166,30 @@ are implemented to pass extra options to the underlying backend:
 2.  By defining the environment variable \`${variable}' options can be passed
     to the backend (default is \`${4}').
 EOF
+  #}}}
 }
 
-function replace_fsep()
-{
-  # Read command
-  declare -r cmd=${1:-""}
-  shift
+# Deprecated
+# function replace_fsep()
+# {
+#   # Read command
+#   declare -r cmd=${1:-""}
+#   shift
+# 
+#   # Read field-separator
+#   declare -r sep=${1:?Invalid field separator}
+#   shift
+# 
+#   # Read (optional) pattern for field-separator
+#   # Default pattern is `%fs'
+#   declare -r var=${1:-%fs}
+# 
+#   sed "s@$var@$sep@g" <<< "$cmd"
+# }
 
-  # Read field-separator
-  declare -r sep=${1:?Invalid field separator}
-  shift
-
-  # Read (optional) pattern for field-separator
-  # Default pattern is `%fs'
-  declare -r var=${1:-%fs}
-
-  sed "s@$var@$sep@g" <<< "$cmd"
-}
+# ----------------------------------------
+# -- Functions working with header data --
+# ----------------------------------------
 
 # Join elements of ARRAY into a single line. Subsequent elements will be
 # separated by FS.
@@ -377,6 +402,10 @@ function delete_fields_by_index()
   #}}}
 }
 
+# ---------------------
+# -- Other functions --
+# ---------------------
+
 # Find any program from the given LIST. The idea is to specify a list of
 # similar programs and allow any of them to fullfill the requirement. The
 # function will return the path to the first element that is found by the order
@@ -400,12 +429,58 @@ function find_program_like()
   #}}}
 }
 
-# function merge_fields()
-# {
-#   # Read header names as first argument
-#   declare -ra _1st_header=(${!1:?Missing 1st header})
-#   shift
-# 
-#   declare -ra _2nd_header=(${!1:?Missing 2nd header})
-#   shift
-# }
+# Generate a temporary direktory and add a corresponding entry to the
+# cleanup_stack.
+#
+# Usage: make_tempdir
+function make_tempdir()
+{
+  #{{{
+  local -r tmpdir=$(mktemp -d)
+  debug "Create temporary directory: ${tmpdir}"
+  echo "${tmpdir}"
+  #}}}
+}
+
+# Usage: pretty_table FS
+function pretty_table()
+{
+  #{{{
+  local -r fsep=${1}
+  shift || die -1 "Missing FS!"
+
+  local -r column_bin=$(which column 2> /dev/null)
+
+  if [ ! -x "${column_bin}" ]; then cat -
+  else ${column_bin} --table --separator=${fsep} <&0
+  fi
+  #}}}
+}
+
+# Execute stack for clean-up process. The stack is executed in REVERSED order.
+# I.e. the last element is executed first, and so on.
+#
+# Usage: execute_cleanup_stack STACK
+function execute_cleanup_stack()
+{
+  #{{{
+  local -ra stack=("${!1}")
+
+  for((i = 1; i <= ${#stack[@]}; i += 1)); do
+    local cmd="${stack[$((-i))]}"
+
+    debug "Clean-up: ${cmd}"
+    eval ${cmd}
+  done
+  #}}}
+}
+
+# Action handler for EXT-trap.
+function on_exit_execute_cleanup_stack()
+{
+  #{{{
+  debug "Preparing for clean exit..."
+  execute_cleanup_stack cleanup_stack[@]
+  debug "Done."
+  #}}}
+}
