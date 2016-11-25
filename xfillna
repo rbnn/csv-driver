@@ -5,7 +5,7 @@
 # File:     xfillna
 # License:  GPL-3.0
 
-# Usage: generateFillNaProgram FIELD PATTERN [VALUE]
+# Usage: generateFillNaProgram FIELD PATTERN [VALUE] [DROP]
 function generateFillNaProgram()
 {
   #{{{
@@ -13,10 +13,17 @@ function generateFillNaProgram()
   local -r pattern=${2:?Missing PATTERN}
   local -r value=${3:-0}
 
+  # Drop missing data?
+  case ${4:-no} in
+  yes)  local -r awk_drop_data="next;" ;;
+  *)    local -r awk_drop_data="" ;;
+  esac
+
   cat << EOF
 {
   if (%${field}% ~ /${pattern}/) {
     %${field}% = ${value};
+    ${awk_drop_data}
   }
 
   print \$0;
@@ -45,6 +52,7 @@ declare -r default_xfillna_inf='[Ii][Nn][Ff]([Ii][Nn][Ii][Tt][Yy])?$'
 declare -r default_xfillna_field=value
 declare -r default_xfillna_pattern="${default_xfillna_nan}"
 declare -r default_xfillna_value=0
+declare -r default_xfillna_drop=no
 declare -r default_xfillna_flags=
 declare -a temporary_files
 
@@ -53,7 +61,7 @@ fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
 declare -r args=$(${getopt_backend} --options=df:ht: \
-  --longoptions=help,pattern:,value:,inf:: \
+  --longoptions=help,pattern:,value:,inf::,drop \
   --name="${program_name}" -- "$@")
 eval set -- "${args}"
 
@@ -96,6 +104,11 @@ while true; do
     shift 2
     ;;
 
+  --drop) # Drop missing data
+    user_drop=yes
+    shift
+    ;;
+
   -h|--help)
     cat << EOF
 Usage: ${program_name} [OPT]
@@ -131,6 +144,9 @@ Available flags for OPT:
   --value=VALUE
     Replace missing data by VALUE (default is \`${default_xfillna_value}').
 
+  --drop
+    Drop rows with missing data (default is \`${default_xfillna_drop}').
+
   -h, --help
     $(help_help_message)
 
@@ -155,8 +171,9 @@ temporary_files+=("${fillna_program}")
 declare -r user_field=${user_field:-${default_xfillna_field}}
 declare -r user_pattern=${user_pattern:-${default_xfillna_pattern}}
 declare -r user_value=${user_value:-${default_xfillna_value}}
+declare -r user_drop=${user_drop:-${default_xfillna_drop}}
 
-generateFillNaProgram "${user_field}" "${user_pattern}" "${user_value}" > "${fillna_program}"
+generateFillNaProgram "${user_field}" "${user_pattern}" "${user_value}" "${user_drop}" > "${fillna_program}"
 
 cmd="xawk -t${fsep} --prefix=% --suffix=% '${fillna_program}'"
 cmd+=" $@ ${XFILLNA_FLAGS:-${default_xfillna_flags}}"
