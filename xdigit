@@ -5,13 +5,6 @@
 # File:     xdigit
 # License:  GPL-3.0
 
-function clean_up()
-{
-  #{{{
-  for file in "${temporary_files[@]}"; do rm -f "${file}" 2> /dev/null; done
-  #}}}
-}
-
 # Usage: generateDigitizeProgram FIELD BINS [UPPER]
 function generateDigitizeProgram()
 {
@@ -52,9 +45,6 @@ EOF
   #}}}
 }
 
-set -e
-trap clean_up 0 # EXIT-signal
-
 source xbase
 
 declare -r program_name=${0##*/}
@@ -64,14 +54,13 @@ declare -r default_xdigit_class=class
 declare -r default_xdigit_bins=bins
 declare -r default_xdigit_meta_flags=
 declare -r default_xdigit_flags=
-declare -a temporary_files
 
 # Initialize default field-separator
 fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
 declare -r args=$(${getopt_backend} --options=b:f:ht: \
-  --longoptions=help,bins:,with-class:,upper \
+  --longoptions=help,bins:,with-class:,upper,sorted \
   --name="${program_name}" -- "$@")
 eval set -- "${args}"
 
@@ -101,6 +90,11 @@ while true; do
   --upper)
     # Allow equality for upper bound
     user_upper=yes
+    shift
+    ;;
+
+  --sorted)
+    data_sorted=yes
     shift
     ;;
 
@@ -177,27 +171,111 @@ declare -r user_field=${user_field:-${default_xdigit_field}}
 declare -r user_class=${user_class:-${default_xdigit_class}}
 declare -r user_bins=${user_bins:-${default_xdigit_bins}}
 
-declare -r meta_program=$(mktemp)
-temporary_files+=("${meta_program}")
-generateDigitizeProgram "${user_field}" "${user_bins}" "${user_upper}" > "${meta_program}"
-
-declare -r main_program=$(mktemp)
-temporary_files+=("${main_program}")
-
 # Check for double/invalid usage of `-'
 if [ "-" == "${data_file}" ] && [ "-" == "${bins_file}" ]; then
   die -1 "Cannot read DATA and BINS from stdin!"
 fi
 
-# Apply meta-program to BINS
-xcat "${bins_file}" \
-  | xawk -t${fsep} -H --prefix=%% --suffix=%% "${meta_program}" $@ "${XDIGIT_META_FLAGS:-${default_xdigit_meta_flags}}" \
-  > "${main_program}"
+if [ "yes" != ${data_sorted:-no} ]; then
+  declare -r meta_program=$(mktemp)
+  generateDigitizeProgram "${user_field}" "${user_bins}" "${user_upper}" > "${meta_program}"
+  cleanup_stack+=("rm '${meta_program}'")
+  
+  declare -r main_program=$(mktemp)
+  cleanup_stack+=("rm '${main_program}'")
+  
+  # Apply meta-program to BINS
+  xcat "${bins_file}" \
+    | xawk -t${fsep} -H --prefix=%% --suffix=%% "${meta_program}" $@ "${XDIGIT_META_FLAGS:-${default_xdigit_meta_flags}}" \
+    > "${main_program}"
+  
+  # Calculate class labels for DATA
+  xcat "${data_file}" \
+    | xawk -t${fsep} --prefix=% --suffix=% "${main_program}" $@ "${XDIGIT_FLAGS:-${default_xdigit_flags}}" \
+    | xheader -t${fsep} --append="${user_class}"
+else
+  declare -r tmpdir=$(mktemp -d)
+  cleanup_stack+=("rmdir '${tmpdir}'")
 
-# Calculate class labels for DATA
-xcat "${data_file}" \
-  | xawk -t${fsep} --prefix=% --suffix=% "${main_program}" $@ "${XDIGIT_FLAGS:-${default_xdigit_flags}}" \
-  | xheader -t${fsep} --append="${user_class}"
+  # Open left file as file descriptor(fd) 4:
+  #
+  # Use xcat to transparently decompress LEFT input into fifo. Afterwards this
+  # fifo is connected to fd 4.
+  if [ "-" != "${data_file}" ]; then
+    declare -r data_in="${tmpdir}/data_in"
+    mkfifo "${data_in}" || die -1 "Cannot create fifo \`${data_in}'!"
+    cleanup_stack+=("rm '${data_in}'")
+  
+    xcat "${data_file}" > "${data_in}" &
+    exec 4< "${data_in}" || die -1 "Cannot map \`${data_file}' to fd 4!"
+  
+  else
+    # DATA is connected to stdin. Therefor fd 0 will be connected to fd 4.
+    exec 4<&0 || die -1 "Cannot map stdin to fd 4!"
+  fi
+  
+  # Open right file as file descriptor(fd) 5: See above
+  if [ "-" != "${bins_file}" ]; then
+    declare -r bins_in="${tmpdir}/bins_in"
+    mkfifo "${bins_in}" || die -1 "Cannot create fifo \`${bins_in}'!"
+    cleanup_stack+=("rm '${bins_in}'")
+  
+    xcat "${bins_file}" > "${bins_in}" &
+    exec 5< "${bins_in}" || die -1 "Cannot map \`${bins_file}' to fd 5!"
+  
+  else
+    # BINS is connected to stdin. Therefor fd 0 will be connected to fd 5.
+    exec 5<&0 || die -1 "Cannot map stdin to fd 5!"
+  fi
+
+  # Read headers from LEFT and RIGHT input
+  IFS= read -r data_raw_header <&4
+  IFS= read -r bins_raw_header <&5
+  
+  # Parse header
+  # Column names are parsed into x_data_fields and x_bins_fields
+  parse_header "${data_raw_header}" "${fsep}" x_data_
+  parse_header "${bins_raw_header}" "${fsep}" x_bins_
+  
+  # Locate data/bins_field in corresponding header.
+  # Results are stored in x_data/bins_index and x_data/bins_found
+  locate_fields x_data_fields[@] x_data_ "${user_field}"
+  locate_fields x_bins_fields[@] x_bins_ "${user_bins}"
+
+  # Create temporary files for join-program
+  declare -r data_fifo="${tmpdir}/data"
+  declare -r bins_fifo="${tmpdir}/bins"
+  
+  mkfifo "${data_fifo}" || die -1 "Cannot create fifo \`${data_fifo}'!"
+  cleanup_stack+=("rm '${data_fifo}'")
+  
+  mkfifo "${bins_fifo}" || die -1 "Cannot create fifo \`${bins_fifo}'!"
+  cleanup_stack+=("rm '${bins_fifo}'")
+  
+  # Connect file descriptors to fifos
+  #
+  # Write data from DATA/BINS into fifo, that will be passed as files to the
+  # join-backend.
+  { echo "${data_raw_header}"; cat <&4; } > "${data_fifo}" &
+  cat <&5 > "${bins_fifo}" &
+  
+  # Configure field-separator in join program
+  cmd="xdigit-sorted -t${fsep}"
+  
+  # Get column-index for data/bins join field
+  declare -ri data_no=$((${x_data_index[0]} + 1))
+  declare -ri bins_no=$((${x_bins_index[0]} + 1))
+  cmd+=" -f${data_no} -b${bins_no} --with-class='${user_class}'"
+  
+  # Pass input data via fifos
+  cmd+=" '${data_fifo}' '${bins_fifo}'"
+
+  eval ${cmd}
+
+  exec 5>&-
+  exec 4>&-
+
+fi
 
 # Report success to shell
 exit 0
