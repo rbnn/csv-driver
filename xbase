@@ -61,8 +61,8 @@ function debug()
   [ "yes" != "${enable_debug}" ] && return
 
   case "${enable_debug_location:-no}" in
-  yes) declare -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
-  *) declare -r location="" ;;
+  yes) local -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
+  *) local -r location="" ;;
   esac
 
   echo "${location}Debug: $@" >&2
@@ -80,8 +80,8 @@ function warning()
   [ "yes" != "${enable_warning}" ] && return
 
   case "${enable_warning_location:-no}" in
-  yes) declare -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
-  *) declare -r location="" ;;
+  yes) local -r location="$(caller 0 | awk '{print $3":"$1;}'): " ;;
+  *) local -r location="" ;;
   esac
 
   echo "${location}Warning: $@" >&2
@@ -124,7 +124,7 @@ function die()
 function set_fsep()
 {
   #{{{
-  declare -r fsep=${1:-${default_field_separator}}
+  local -r fsep=${1:-${default_field_separator}}
   grep '@' <<< "${fsep}" && die -1 "Field separator must not contain \`@'!"
   echo "${fsep}"
   #}}}
@@ -173,16 +173,16 @@ EOF
 # function replace_fsep()
 # {
 #   # Read command
-#   declare -r cmd=${1:-""}
+#   local -r cmd=${1:-""}
 #   shift
 # 
 #   # Read field-separator
-#   declare -r sep=${1:?Invalid field separator}
+#   local -r sep=${1:?Invalid field separator}
 #   shift
 # 
 #   # Read (optional) pattern for field-separator
 #   # Default pattern is `%fs'
-#   declare -r var=${1:-%fs}
+#   local -r var=${1:-%fs}
 # 
 #   sed "s@$var@$sep@g" <<< "$cmd"
 # }
@@ -193,18 +193,39 @@ EOF
 
 # Join elements of ARRAY into a single line. Subsequent elements will be
 # separated by FS.
+# NOTICE: FS only accepts a single character. If a multi-character separator is
+#         needed, use join_by_str.
 #
 # Usage: join_by [ARRAY [FS]]
 function join_by()
 {
   #{{{
   # Read header names as first argument
-  declare -ra x=(${!1})
+  local -ra x=(${!1})
 
   # Read (optional) field-separator
   # Default field-separator is comma `,'
   local IFS=${2:-,}
   echo "${x[*]}"
+  #}}}
+}
+
+# Join elements of ARRAY into a single line. Subsequent elements will be
+# separated by FS. FS may contain multiple characters.
+#
+# Usage: join_by_str [ARRAY [FS]]
+function join_by_str()
+{
+  #{{{
+  local -ra _fields=(${!1})
+  local -r _fsep=${2:-,}
+
+  local -i n=${#_fields[@]}
+
+  [ 0 -lt $n ] && echo -n "${_fields[0]}"
+  for((i = 1; i < n; i += 1)); do
+    echo -n "${_fsep}${_fields[$i]}"
+  done
   #}}}
 }
 
@@ -216,14 +237,14 @@ function join_by()
 function parse_header()
 {
   #{{{
-  declare -a fields
-  # declare -a columns
+  local -a fields
+  # local -a columns
 
   local IFS=${2:?Missing FS}
   read -r -a fields <<< "${1:?Missing STR}"
 
   # Check for non-empty column names
-  declare -i no=1
+  local -i no=1
   for fn in "${fields[@]}"; do
     [ -z "${fn}" ] && die -1 "Field name ${no} must not be empty!"
     ((no + 1))
@@ -250,17 +271,17 @@ function locate_fields()
 {
   #{{{
   # Read header names and prefix
-  declare -ra header=(${!1:?Missing ARRAY})
-  declare -r prefix=${2:?Missing PREFIX}
+  local -ra header=(${!1:?Missing ARRAY})
+  local -r prefix=${2:?Missing PREFIX}
   shift 2
 
-  declare -a index
-  declare -a flags
+  local -a index
+  local -a flags
 
   for fn in "$@"; do
 
-    declare -i fn_idx=-1
-    declare -i hn_idx=0
+    local -i fn_idx=-1
+    local -i hn_idx=0
 
     # Strip sort flags from field name
     [ -z "${fn}" ] && die -1 "Empty field name!"
@@ -287,10 +308,10 @@ function locate_fields()
   done
 
   # Sort selected fields by column-number
-  declare -i idx
-  declare -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
+  local -i idx
+  local -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
 
-  declare -a found
+  local -a found
   for idx in "${sorted_index[@]}"; do found+=("${header[${idx}]}"); done
 
   # Export arrays with prefix as global variables
@@ -309,12 +330,12 @@ function locate_fields()
 function select_all_fields()
 {
   #{{{
-  declare -ra header=(${!1:?Missing ARRAY})
-  declare -r prefix=${2?Missing PREFIX}
+  local -ra header=(${!1:?Missing ARRAY})
+  local -r prefix=${2?Missing PREFIX}
 
-  declare -a index
-  declare -a flags
-  declare -a found
+  local -a index
+  local -a flags
+  local -a found
 
   for fn in "${header[@]}"; do
     index+=("${#index[@]}")
@@ -337,10 +358,10 @@ function select_all_fields()
 function add_prefix_to_fields()
 {
   #{{{
-  declare -ra header=(${!1:?Missing ARRAY})
-  declare -r str=${2:?Missing STR}
+  local -ra header=(${!1:?Missing ARRAY})
+  local -r str=${2:?Missing STR}
 
-  declare -a fields
+  local -a fields
   for fn in ${header[@]}; do fields+=("${str}${fn}"); done
 
   # Export arrays with prefix as global variables
@@ -356,10 +377,10 @@ function add_prefix_to_fields()
 function add_suffix_to_fields()
 {
   #{{{
-  declare -ra header=(${!1:?Missing ARRAY})
-  declare -r str=${2:?Missing STR}
+  local -ra header=(${!1:?Missing ARRAY})
+  local -r str=${2:?Missing STR}
 
-  declare -a fields
+  local -a fields
   for fn in ${header[@]}; do fields+=("${fn}${str}"); done
 
   # Export arrays with prefix as global variables
@@ -375,14 +396,14 @@ function add_suffix_to_fields()
 function delete_fields_by_index()
 {
   #{{{
-  declare -ra header=(${!1:?Missing ARRAY})
-  declare -ra select=(${!2:?Missing INDEX})
+  local -ra header=(${!1:?Missing ARRAY})
+  local -ra select=(${!2:?Missing INDEX})
 
-  declare -a fields
-  declare -i idx=0
+  local -a fields
+  local -i idx=0
 
   for fn in ${header[@]}; do
-    declare -i found=0
+    local -i found=0
 
     for jdx in ${select[@]}; do
       if [ ${idx} -eq ${jdx} ]; then
@@ -399,6 +420,122 @@ function delete_fields_by_index()
 
   # Export arrays with prefix as global variables
   eval "${3}fields"='("${fields[@]}")'
+  #}}}
+}
+
+# --------------------
+# -- File functions --
+# --------------------
+
+# Connect files FILE_1 to FILE_N to fifos 1 to N. The full path to the fifos is
+# written into the array PREFIX_fifos. This function internally calls the
+# xcat-tool for every input file and generates background jobs to automatically
+# decompress the contents. It is also possible to pass the special file `-'
+# (a.k.a. stdin) at most once, to handle data from standard input. To handle
+# all the fifos, the function creates a new temporary directory and poluplates
+# it with the fifos. All temporary files and directories are added pushed onto
+# cleanup_stack to be removed by the on_exit_execute_cleanup_stack handler.
+#
+# Usage: connect_files PREFIX FILE_1 [... FILE_N]
+function connect_files()
+{
+  #{{{
+  local -r prefix=${1}
+  shift || die -1 "Missing PREFIX!"
+  [ 0 -lt $# ] || die -1 "Missing FILE_1!"
+
+  local -r tmpdir=$(mktemp -d)
+  cleanup_stack+=("rmdir '${tmpdir}'")
+
+  # Open all input files and pass them to the xcat-tool to transparently
+  # decompress them if needed. This also allows to handle the special `-' file
+  # (a.k.a. stdin).
+  local used_stdin_file=no
+  local -a files
+  for fn in "$@"; do
+    idx=${#files[@]}
+    fifo=$(printf "%s/%03i" "${tmpdir}" ${idx})
+    mkfifo "${fifo}" || die -1 "Cannot create fifo \`${fifo}'!"
+    cleanup_stack+=("rm '${fifo}'")
+    files+=("${fifo}")
+
+    # Check for multiple use of stdin
+    if [ "-" == "${fn}" ]; then
+      [ "no" != "${used_stdin_file}" ] && die -1 "Multiple use of \`-'!"
+      used_stdin_file=yes
+    fi
+
+    debug "Connecting input file \`${fn}' to fifo \`${fifo}'..."
+    if [ "-" != ${fn} ]; then xcat "${fn}" > "${fifo}" &
+    else cat <&0 > "${fifo}" &
+    fi
+
+  done
+
+  # Export arrays with prefix as global variables
+  eval "${prefix}fifos"='("${files[@]}")'
+  #}}}
+}
+
+# Return the next unused file descriptor. The function checks the
+# /proc/<PID>/fd/ directory and tries to find the minimum of I such that I is
+# no file in this directory. According the the specification of the
+# proc-filesystem, this directory contains all open file-descriptors for the
+# given process-ID.
+#
+# Usage: next_fd
+function next_fd()
+{
+  #{{{
+  # Source: http://stackoverflow.com/a/8342705
+  local fd=3
+
+  while [ -e "/proc/$$/fd/${fd}" ]; do
+    debug "File descriptor ${fd} already in use."
+    fd=$((fd + 1))
+  done
+
+  debug "Found unused file descriptor: ${fd}"
+  echo "${fd}"
+  #}}}
+}
+
+# Open files FILE_1 to FILE_N and return the corresponding file descriptors.
+# The file descriptors are written into the array PREFIX_fds. The files have to
+# be closed manually or by calling close_files.
+#
+# Usage: open_files PREFIX FILE1 [... FILEN]
+function open_files()
+{
+  #{{{
+  local -r prefix=${1}
+  shift || die -1 "Missing PREFIX!"
+  [ 0 -lt $# ] || die -1 "Missing FILE1!"
+
+  local -a fds
+  for fn in "$@"; do
+    local fd=$(next_fd)
+    debug "Open file \`${fn}'(${fd})..."
+
+    eval "exec ${fd}<'${fn}'" || die -1 "Cannot open \`${fn}' with fd ${fd}!"
+    fds+=("${fd}")
+  done
+
+  # Export arrays with prefix as global variables
+  eval "${prefix}fds"='("${fds[@]}")'
+  #}}}
+}
+
+# Close file descriptors FD1 to FDN.
+#
+# Usage: close_files [FD1 [... FDN]]
+function close_files()
+{
+  #{{{
+  for fd in "$@"; do
+    debug "Close file descriptor ${fd}."
+    eval "exec ${fd}>&-"
+  done
   #}}}
 }
 
