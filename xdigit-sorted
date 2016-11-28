@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+# coding: utf8
+
+import sys
+from getopt import getopt
+from os.path import basename
+
+def show_help():
+  print 'Usage: %s [OPT] DATA BINS' % basename(sys.argv[0])
+  print """
+Calculate class labels for DATA.
+
+Available flags for OPT:
+  -b B
+    Read class limits from column B of file BINS (1 ≤ B).
+
+  -f F
+    Read field F from file DATA (1 ≤ F).
+
+  -T FS
+    Use FS as field separator (default it `,\').
+
+  --header
+    Treat first row of both files as header. When this flag is set, the column
+    name given with --with-class flag is used to update the output header.
+  
+  --with-class=STR
+    Write class labels into column STR (default is `class\').
+
+  --upper
+    Match class labels on lo < x ≤ hi (default is `lo ≤ x < hi).
+    
+  -h, --help
+    Show this message and terminate."""
+  sys.exit(0)
+
+def process_row(row, fsep = ','):
+  line = row.rstrip('\n')
+  cols = line.split(fsep)
+  return cols
+
+fsep = ','
+data_index = None
+bin_index = None
+class_label = 'class'
+with_header = True
+# By default bins are matched like: lo ≤ x < hi
+f_compare = lambda x, hi: (x < hi)
+
+opts, args = getopt(sys.argv[1:], 
+  'b:f:ht:',
+  [ 'help',
+    'header',
+    'with-class=',
+    'upper'])
+
+for key, val in opts:
+  if '-f' == key: data_index = int(val)
+  elif '-b' == key: bin_index = int(val)
+  elif '-t' == key: fsep = val
+  elif ('-h' == key) or ('--help' == key): show_help()
+  elif '--header' == key: with_header = True
+  elif '--with-class' == key: class_label = val
+  elif '--upper' == key: 
+    # Match bins on: lo < x ≤ hi
+    f_compare = lambda x, hi: (x <= hi)
+
+assert data_index is not None, 'Missing -f flag!'
+assert bin_index is not None, 'Missing -b flag!'
+assert 0 < data_index, 'Invalid -f flag!'
+assert 0 < bin_index, 'Invalid -b flag!'
+assert 0 < len(args), 'Missing DATA'
+assert 1 < len(args), 'Missing BINS'
+
+# First two non-option arguments are
+# taken as input files DATA and BINS
+data_file, bins_file = args[:2]
+# assert '-' != data_file, 'Cannot read DATA from stdin!'
+# assert '-' != bins_file, 'Cannot read BINS from stdin!'
+
+with open(data_file, 'r') as data_in:
+  with open(bins_file, 'r') as bins_in:
+    # Update header, i.e. read first line of both files
+    # and append a new column for the value-class 
+    if with_header:
+      # Ignore first row from BINS (header)
+      bins_in.readline()
+      row = data_in.readline()
+      cols = process_row(row, fsep)
+      print fsep.join(cols) + fsep + class_label
+    
+    # First class is 0, i.e. all values less than 
+    # the lowest-limit are mapped to class 0
+    index = 0
+    lower = -np.inf
+    upper = -np.inf
+    
+    read_data = True
+    read_bins = True
+    has_bins = True
+    
+    while True:
+      if read_data:
+        try:
+          # Having the main loop as infinite loop is okay, as
+          # it will be left as soon as there's no more data.
+          row = process_row(data_in.readline(), fsep)
+          val = float(row[data_index - 1])
+        except: break
+        read_data = False
+    
+      if read_bins:
+        old_lower = lower
+        lower = upper
+    
+        try:
+          upper = float(process_row(bins_in.readline(), fsep)[bin_index - 1])
+          index += 1
+        except:
+          lower = old_lower
+          upper = np.inf
+          has_bins = False
+        read_bins = False
+    
+      if has_bins and not f_compare(val, upper): read_bins = True
+      else:
+        try: print fsep.join(row) + ',%i' % index
+        except:
+          keep_reading = False
+          break
+        read_data = True
