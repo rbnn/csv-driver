@@ -70,5 +70,5 @@ IFS= read -r raw_header
 parse_header "$raw_header" "${fsep}" x_
 locate_fields x_fields[@] x_ "${fields[@]}"
 
-for((idx = 0; idx < ${#x_index[@]}; idx += 1)); do echo "${x_index[${idx}]}:${x_fields[${idx}]}"; done
+for((idx = 0; idx < ${#x_index[@]}; idx += 1)); do echo "$((1 + ${x_index[${idx}]})):${x_fields[${idx}]}"; done
 exit 0

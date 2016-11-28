@@ -86,11 +86,11 @@ EOF
   esac
 done
 
-# Coreutils' cut program expects
-# Fields must be unique
-num_fields=${#fields[@]}
-num_unique=($(printf "%s\n" "${fields[@]}" | sort -u | wc -l))
-[ $num_fields -ne $num_unique ] && die -1 "Selected fields must be unique!"
+# # Coreutils' cut program expects
+# # Fields must be unique
+# num_fields=${#fields[@]}
+# num_unique=($(printf "%s\n" "${fields[@]}" | sort -u | wc -l))
+# [ $num_fields -ne $num_unique ] && die -1 "Selected fields must be unique!"
 
 # Read first row and keep stdin open
 IFS= read -r raw_header

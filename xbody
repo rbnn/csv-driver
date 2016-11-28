@@ -43,6 +43,9 @@ declare -r raw_header
 # If dry-run mode is enabled, cmd will only be echoed
 if [ 0 -eq ${XBODY_DRYRUN:-0} ]; then
   [ 0 -eq ${XBODY_NO_HEADER:-0} ] && echo "${raw_header}"
+  # cmd=${1:?Missing CMD}
+  # shift
+  # exec ${cmd} $@
   $@
 else echo "$@"
 fi
