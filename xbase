@@ -441,7 +441,10 @@ function select_all_fields()
   #}}}
 }
 
-# This functions returns the arrays <PREFIX>
+# This functions returns the array <PREFIX>index by selecting unique column
+# names from ARRAY. The first occurrence of each column name is taken as
+# unique.
+#
 # Usage: select_unique_fields ARRAY PREFIX
 function select_unique_fields()
 {
