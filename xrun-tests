@@ -1,0 +1,16 @@
+#!/bin/bash
+
+source xbase
+# set_debug_mode verbose
+
+# Import `test_assert' function
+source tests/common.sh
+
+# Run function tests
+source tests/xbase_join_by_str.sh
+source tests/xbase_parse_header.sh
+source tests/xbase_locate_fields.sh
+source tests/xbase_add_prefix_to_fields.sh
+source tests/xbase_add_suffix_to_fields.sh
+source tests/xbase_delete_fields_by_index.sh
+source tests/xbase_match_fields_by_pattern.sh

@@ -1,6 +1,9 @@
 Select rows by COLUMN values:
   xawk '1 > %COLUMN%'
 
+Join on multiple fields: FIELD1,...,FIELDN
+  xjoin -jFIELD1 --left-prefix=left --right-prefix=right... | xawk '(%left_FIELD2% == %right_FIELD2%) && ... (%left_FIELDN% == %right_FIELDN%) {print }'
+
 Common interface:
   -d
     Enable dry-run mode. Only print configured command.

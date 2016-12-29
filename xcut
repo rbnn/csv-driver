@@ -2,7 +2,7 @@
 
 # Author:   Ronny Biemann
 #           Copyright 2016
-# File:     xjoin
+# File:     xcut
 # License:  GPL-3.0
 
 set -e
@@ -10,6 +10,7 @@ source xbase
 
 declare -r program_name=${0##*/}
 declare -r default_xcut_flags=
+declare -r egrep_backend=$(find_program_like ${egrep_like_programs[@]})
 declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
 declare -r cut_backend=$(find_program_like ${cut_like_programs[@]})
 
@@ -18,7 +19,7 @@ fsep=$(set_fsep)
 
 # Parse command line arguments and feed parsed arguments
 declare -r args=$(${getopt_backend} --options=dhf:t: \
-  --longoptions=help,complement \
+  --longoptions=help,complement,regex:,unique \
   --name="${program_name}" -- "$@")
 eval set -- "$args"
 
@@ -45,6 +46,16 @@ while true; do
     select_complement=1
     shift
     ;;
+
+  --regex) # Use regular expression to select fields
+    regex_fields=(${regex_fields[@]} "${2}")
+    shift 2
+    ;;
+
+  --unique) # Select unique columns
+    unique_fields=1
+    shift
+    ;;
     
   -h|--help)
     cat << EOF
@@ -67,6 +78,14 @@ Available flags for OPT:
 
   --complement
     Complement the set of selected fields
+
+  --regex=EXPR[:EXPR_OPT]    (backend: ${egrep_backend} [EXPR_OPT])
+    Select fields, if their names match at least one regular EXPRession.
+    Optionally EXPR_OPT may be specified to passed directly to the backend.
+
+  --unique
+    Select unique fields and drop duplicate columns. This selects the FIRST
+    occurence of each column as unique.
 
   -h, --help
     $(help_help_message)
@@ -100,9 +119,31 @@ IFS= read -r raw_header
 # `n' or `g'.
 parse_header "${raw_header}" "${fsep}" x_
 
+# enable_debug=yes
+# # declare -a fields
+# Select all fields, that match at least one regular expression. Therefore all
+# field names are matched against all regular expressions using egrep.
+for full_regexp in "${regex_fields[@]}"; do
+  # Strip :EXPR_OPT from input
+  regexp=${full_regexp%%:*}
+  # Extract EXPR_OPT from input (if available)
+  regopt=${full_regexp:$((${#regexp} + 1))}
+
+  debug "Regular expression: \`${regexp}' [${regopt}]"
+
+  for fname in "${x_fields[@]}"; do
+    ${egrep_backend} ${regopt} "${regexp}" <<<"${fname}" > /dev/null && fields=(${fields[@]} ${fname})
+  done
+done
+
 # Find columns in x_fields and store indices into x_index and x_found. These
 # indices are zero-based.
-locate_fields x_fields[@] x_ ${fields[@]}
+case "${unique_fields:-0}" in
+1)  select_unique_fields x_fields[@] x_;;
+*)  locate_fields x_fields[@] x_ ${fields[@]};;
+esac
+
+((0 < ${#x_index[@]})) || die -1 "Invalid number of columns!"
 
 # Build final command
 cmd="${cut_backend} -d${fsep}"

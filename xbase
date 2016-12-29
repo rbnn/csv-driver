@@ -5,6 +5,21 @@
 # File:     xbase
 # License:  GPL-3.0
 
+# NOTICE: Avoid using variable names like `_...'. These are used as local
+#         variables within the functions. It might break the script, when using
+#         e.g. `_cmd' outside a function, as this is used inside of
+#         on_exit_execute_cleanup_stack.
+# NOTICE: This script requires to register the EXIT-trap. Therefore you
+#         shouldn't overwrite it to not break the script's auto-clean
+#         functionality. Nevertheless several functions push their clean-up
+#         code into the `cleanup_stack' array, which will be handled on EXIT.
+#         If you overwrite the EXIT-trap, YOU are responsible for cleaning up
+#         temporary files and stuff. The better solution is to push your
+#         clean-up code onto the `cleanup_stack' by
+#                           `cleanup_stack+=("YOUR_CODE")'
+#         such that the script handles it on exit. The code is executed in
+#         reverse order (LIFO) as it is pushed onto the stack.
+
 # Dependencies:
 #   bash (required)
 #   coreutils (required)
@@ -13,23 +28,29 @@
 #   util-linux  (optional)
 
 set -e
-trap on_exit_execute_cleanup_stack 0 # EXIT-signal
+trap on_exit_execute_cleanup_stack EXIT # EXIT-signal
 
+# Enable support for bash-builtin script debugging (disable with set +o ... )
+# set -o verbose  # Echo commands before execution
+# set -o xtrace   # Echo commands after command-line processing
+# export PS4='$0:$LINENO: '  # Prefix for bash-builtind debug information
+# trap 'on_debug "$0" "$LINENO"'  DEBUG # Call on_debug before any command is executed
+
+# ----------------------
+# -- Global variables --
+# ----------------------
+export xbase_fs=${xbase_fs:-,}    # (default) Field separator
+
+# -----------------------------
+# -- Configuration variables --
+# -----------------------------
 export enable_debug=no
+# Set `enable_debug_noop=yes' BEFORE sourcing xbase, to bind debug to the no-operation.
 export enable_debug_location=yes
 export enable_call_stack=yes
 export enable_warning=yes
 export enable_warning_location=yes
 declare -r default_field_separator=,
-
-# Array to hold commands, that shall be executed on exit
-declare -a cleanup_stack
-
-# Register process ID of top-level shell. This is required to allow the
-# die-function to globally abort the current program. Otherwise only the
-# sub-shell would be terminated.
-# Source: http://stackoverflow.com/a/9894126
-declare -r top_level_pid=$$
 
 # Default commands
 declare -ar awk_like_programs=("mawk" "awk")
@@ -44,10 +65,58 @@ declare -ar sed_like_programs=("sed")
 declare -ar split_like_programs=("split")
 declare -ar sort_like_programs=("sort")
 
+# Array to hold commands, that shall be executed on exit. The code is executed
+# in reverse order as they're entered into the array (LIFO).
+declare -a cleanup_stack
+
+# Register process ID of top-level shell. This is required to allow the
+# die-function to globally abort the current program. Otherwise only the
+# sub-shell would be terminated.
+# Source: http://stackoverflow.com/a/9894126
+declare -r top_level_pid=$$
+
 # ----------------------
 # -- Output functions --
 # ----------------------
 
+# Change the MODE for debug message generation. Available values for MODE:
+#   none      Debug messages are disabled (similar to `enable_debug=no')
+#   default   Only print debug messages (see `debug MESSAGE...')
+#   verbose   Same as `default' but also print commands as they're read and
+#             executed by the shell.
+# If MODE is omitted, it defaults to `none'.
+#
+# Usage: set_debug_mode [MODE]
+function set_debug_mode()
+{
+  #{{{
+  case "${1:-none}" in
+  default)
+    enable_debug=yes
+    set +o verbose
+    set +o xtrace
+    ;;
+
+  verbose)
+    enable_debug=yes
+    # Print rows as they are read from the scripts
+    set -o verbose
+    # Print rows as they are executed
+    set -o xtrace
+    ;;
+
+  none)
+    enable_debug=no
+    set +o verbose
+    set +o xtrace
+    ;;
+
+  *) die -1 "Unknown debug-mode: ${1}" ;;
+  esac
+  #}}}
+}
+
+if [ "no" == "${enable_debug_noop:-no}" ]; then
 # Write debugging MESSAGE to stderr. The output is controlled by the variables
 # enable_debug and enable_debug_location. If enable_debug evaluates to a value
 # other than yes, the output of the message is suppressed. Setting
@@ -68,6 +137,17 @@ function debug()
   echo "${location}Debug: $@" >&2
   #}}}
 }
+
+else
+# Alternatively replace debug by the empty function.This will ignore
+# enable_debug and suppress all messages given to debug. In debug mode
+# `verbose' these lines are read as `debug ...' but will result in `:' (no-op)
+# execution.
+function debug()
+{
+  :
+}
+fi
 
 # Write MESSAGE to stderr. This function is similar to debug. Like debug it is
 # controlled by enable_warning and enable_warning_location.
@@ -110,7 +190,7 @@ function die()
       | (printf "frame\tline\tfunction\tfile\n"; nl) \
       | column --table \
       | sed -e 's/^/  /' >&2
-  fi | pretty_table " "
+  fi
 
   echo "Error: $@" >&2
 
@@ -124,9 +204,12 @@ function die()
 function set_fsep()
 {
   #{{{
-  local -r fsep=${1:-${default_field_separator}}
-  grep '@' <<< "${fsep}" && die -1 "Field separator must not contain \`@'!"
-  echo "${fsep}"
+  local -r _fs=${1:-${default_field_separator}}
+  grep '@' <<< "${_fs}" && die -1 "Field separator must not contain \`@'!"
+
+  # Also update global field separator `xbase_fs'
+  xbase_fs="${_fs}"
+  echo "${_fs}"
   #}}}
 }
 
@@ -169,47 +252,29 @@ EOF
   #}}}
 }
 
-# Deprecated
-# function replace_fsep()
-# {
-#   # Read command
-#   local -r cmd=${1:-""}
-#   shift
-# 
-#   # Read field-separator
-#   local -r sep=${1:?Invalid field separator}
-#   shift
-# 
-#   # Read (optional) pattern for field-separator
-#   # Default pattern is `%fs'
-#   local -r var=${1:-%fs}
-# 
-#   sed "s@$var@$sep@g" <<< "$cmd"
-# }
-
 # ----------------------------------------
 # -- Functions working with header data --
 # ----------------------------------------
 
 # Join elements of ARRAY into a single line. Subsequent elements will be
 # separated by FS.
-# NOTICE: FS only accepts a single character. If a multi-character separator is
-#         needed, use join_by_str.
 #
 # Usage: join_by [ARRAY [FS]]
 function join_by()
 {
   #{{{
-  # Read header names as first argument
-  local -ra x=(${!1})
+  join_by_str "${1}" "${2}"
+  # # Read header names as first argument
+  # local -ra _array=(${!1})
 
-  # Read (optional) field-separator
-  # Default field-separator is comma `,'
-  local IFS=${2:-,}
-  echo "${x[*]}"
+  # # Read (optional) field-separator
+  # # Default field-separator is comma `,'
+  # local IFS=${2:-${xbase_fs}}
+  # echo "${_array[*]}"
   #}}}
 }
 
+# Deprecated: `join_by(_str)?' are equivalent
 # Join elements of ARRAY into a single line. Subsequent elements will be
 # separated by FS. FS may contain multiple characters.
 #
@@ -217,15 +282,39 @@ function join_by()
 function join_by_str()
 {
   #{{{
-  local -ra _fields=(${!1})
-  local -r _fsep=${2:-,}
+  local -ra _array=(${!1})
+  local -r _fs=${2:-${xbase_fs}}
 
-  local -i n=${#_fields[@]}
+  local -i _n=${#_array[@]}
+  local _str=""
 
-  [ 0 -lt $n ] && echo -n "${_fields[0]}"
-  for((i = 1; i < n; i += 1)); do
-    echo -n "${_fsep}${_fields[$i]}"
-  done
+  if (( 0 < $_n )); then
+    _str=$(printf -- "%s" "${_array[0]}")
+    (( 1 < $_n )) && _str+=$(printf -- "${_fs}%s" "${_array[@]:1}")
+  fi
+
+  echo "${_str}"
+  #}}}
+}
+
+# Usage: read_header FD FS [PREFIX]
+function read_header()
+{
+  #{{{
+  local -r _fd=${1:?Missing FD}
+  local -r _fs=${2:?Missing FS}
+  local -r _prefix=${3}
+
+  # Read from FD without interpreting escape sequences. Wrapping with eval is
+  # required, to re-parse the redirection. As redirection is handled prior to
+  # variable substitution.
+  eval "IFS= read -r _raw_header <&${_fd}"
+
+  # Like always, parse the header string
+  parse_header "${_raw_header}" "${_fs}" "${_prefix}"
+
+  # Return the raw-header into variable <PREFIX>raw_header.
+  eval "${_prefix}raw_header"='"${_raw_header}"'
   #}}}
 }
 
@@ -271,53 +360,54 @@ function locate_fields()
 {
   #{{{
   # Read header names and prefix
-  local -ra header=(${!1:?Missing ARRAY})
-  local -r prefix=${2:?Missing PREFIX}
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -r _prefix=${2:?Missing PREFIX}
   shift 2
 
-  local -a index
-  local -a flags
+  local -a _index
+  local -a _flags
 
-  for fn in "$@"; do
+  for _fn in "$@"; do
 
-    local -i fn_idx=-1
-    local -i hn_idx=0
+    local -i _fn_idx=-1
+    local -i _hn_idx=0
 
     # Strip sort flags from field name
-    [ -z "${fn}" ] && die -1 "Empty field name!"
-    _N=${fn%%:*}
+    [ -z "${_fn}" ] && die -1 "Empty field name!"
+    _N=${_fn%%:*}
 
     # Keep suffix from field name, i.e. from next character on after `:'
-    _O=${fn:$((${#_N} + 1))}
+    _O=${_fn:$((${#_N} + 1))}
 
     # Search for _N in column names
-    for hn in "${header[@]}"; do
-      if [ "${hn}" = "${_N}" ]; then
-        fn_idx=${hn_idx}
+    for _hn in "${_array[@]}"; do
+      if [ "${_hn}" == "${_N}" ]; then
+        _fn_idx=${_hn_idx}
         break
       fi
 
-      hn_idx=$((hn_idx + 1))
+      _hn_idx=$((_hn_idx + 1))
     done
 
     # Raise error, if field could not be found
-    [ -1 -eq ${fn_idx} ] && die -1 "No such field: ${_N}"
+    (( 0 > ${_fn_idx} )) && die -1 "No such field: ${_N}"
 
-    index+=("${fn_idx}")
-    flags+=("${_O}")
+    _index+=("${_fn_idx}")
+    _flags+=("${_O}")
   done
 
   # Sort selected fields by column-number
-  local -i idx
-  local -ra sorted_index=($(printf "%s\n" "${index[@]}" | sort -n))
+  local -ra _sorted=($(printf "%s\n" "${_index[@]}" | sort -n))
+  local -a _found
 
-  local -a found
-  for idx in "${sorted_index[@]}"; do found+=("${header[${idx}]}"); done
+  for _idx in "${_sorted[@]}"; do
+    _found+=("${_array[${_idx}]}")
+  done
 
   # Export arrays with prefix as global variables
-  eval "${prefix}index"='("${index[@]}")'
-  eval "${prefix}found"='("${found[@]}")'
-  eval "${prefix}flags"='("${flags[@]}")'
+  eval "${_prefix}index"='("${_index[@]}")'
+  eval "${_prefix}found"='("${_found[@]}")'
+  eval "${_prefix}flags"='("${_flags[@]}")'
   #}}}
 }
 
@@ -330,23 +420,67 @@ function locate_fields()
 function select_all_fields()
 {
   #{{{
-  local -ra header=(${!1:?Missing ARRAY})
-  local -r prefix=${2?Missing PREFIX}
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -r _prefix=${2?Missing PREFIX}
+  local -r _default_flags=${3:-g} # Default sort flags
 
-  local -a index
-  local -a flags
-  local -a found
+  local -a _index
+  local -a _flags
+  local -a _found
 
-  for fn in "${header[@]}"; do
-    index+=("${#index[@]}")
-    flags+=("${3:-g}")
-    found+=("${fn}")
+  for _fn in "${_array[@]}"; do
+    _index+=("${#_index[@]}")
+    _flags+=("${_default_flags}")
+    _found+=("${_fn}")
   done
 
   # Export arrays with prefix as global variables
-  eval "${prefix}index"='("${index[@]}")'
-  eval "${prefix}found"='("${found[@]}")'
-  eval "${prefix}flags"='("${flags[@]}")'
+  eval "${_prefix}index"='("${_index[@]}")'
+  eval "${_prefix}found"='("${_found[@]}")'
+  eval "${_prefix}flags"='("${_flags[@]}")'
+  #}}}
+}
+
+# This functions returns the arrays <PREFIX>
+# Usage: select_unique_fields ARRAY PREFIX
+function select_unique_fields()
+{
+  #{{{
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -ri _n_col=${#_array[@]}
+  local -r _prefix=${2?Missing PREFIX}
+
+  local -a _unique_fields
+  local -a _index
+  local -i _fno=0
+  local _found
+
+  # Iterate all given field names and add them to `_unique_fields' iff they're
+  # not already contained. Also store their index and return it as result.
+  for _fn in "${_array[@]}"; do
+    _found=no
+
+    for _ufn in "${_unique_fields[@]}"; do
+      # Check if `_fn' (field-name) has already been added to the
+      # `_unique_fields' and stop current inner loop if so. We don't need to
+      # count the duplicates.
+      if [ "${_fn}" == "${_ufn}" ]; then
+        debug "Found duplicate field: ${_fn}"
+        _found=yes
+        break
+      fi
+    done
+
+    if [ "yes" != "${_found}" ]; then
+      _unique_fields+=("${_fn}")
+      _index+=(${_fno})
+    fi
+
+    ((_fno += 1))
+  done
+
+  # Export arrays with prefix as global variables
+  eval "${_prefix}index"='("${_index[@]}")'
   #}}}
 }
 
@@ -358,14 +492,16 @@ function select_all_fields()
 function add_prefix_to_fields()
 {
   #{{{
-  local -ra header=(${!1:?Missing ARRAY})
-  local -r str=${2:?Missing STR}
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -r _str=${2:?Missing STR}
 
-  local -a fields
-  for fn in ${header[@]}; do fields+=("${str}${fn}"); done
+  local -a _fields
+  for _fn in ${_array[@]}; do
+    _fields+=("${_str}${_fn}")
+  done
 
   # Export arrays with prefix as global variables
-  eval "${3}fields"='("${fields[@]}")'
+  eval "${3}fields"='("${_fields[@]}")'
   #}}}
 }
 
@@ -377,14 +513,16 @@ function add_prefix_to_fields()
 function add_suffix_to_fields()
 {
   #{{{
-  local -ra header=(${!1:?Missing ARRAY})
-  local -r str=${2:?Missing STR}
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -r _str=${2:?Missing STR}
 
-  local -a fields
-  for fn in ${header[@]}; do fields+=("${fn}${str}"); done
+  local -a _fields
+  for _fn in ${_array[@]}; do
+    _fields+=("${_fn}${_str}")
+  done
 
   # Export arrays with prefix as global variables
-  eval "${3}fields"='("${fields[@]}")'
+  eval "${3}fields"='("${_fields[@]}")'
   #}}}
 }
 
@@ -392,34 +530,62 @@ function add_suffix_to_fields()
 # <PREFIX>fields. PREFIX is an optional argument and defaults to an empty
 # string.
 #
-# Usage: delete_fields_by_index FIELD INDEX [PREFIX]
+# Usage: delete_fields_by_index ARRAY INDEX [PREFIX]
 function delete_fields_by_index()
 {
   #{{{
-  local -ra header=(${!1:?Missing ARRAY})
-  local -ra select=(${!2:?Missing INDEX})
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -ra _select=(${!2:?Missing INDEX})
 
-  local -a fields
-  local -i idx=0
+  local -a _fields
+  local -i _idx=0
 
-  for fn in ${header[@]}; do
-    local -i found=0
+  for _fn in ${_array[@]}; do
+    _found=no
 
-    for jdx in ${select[@]}; do
-      if [ ${idx} -eq ${jdx} ]; then
-        found=1
+    for _jdx in ${_select[@]}; do
+      if (( ${_idx} == ${_jdx} )); then
+        _found=yes
         break
       fi
     done
 
     # Only keep column, that wasn't found in selection
-    [ 0 -eq ${found} ] && fields+=("${fn}")
+    [ "yes" != "${_found}" ] && _fields+=("${_fn}")
 
-    ((idx += 1))
+    ((_idx += 1))
   done
 
   # Export arrays with prefix as global variables
-  eval "${3}fields"='("${fields[@]}")'
+  eval "${3}fields"='("${_fields[@]}")'
+  #}}}
+}
+
+# Usage: match_fields_by_pattern ARRAY PATTERN [PREFIX]
+function match_fields_by_pattern()
+{
+  #{{{
+  local -ra _array=(${!1:?Missing ARRAY})
+  local -r _pattern=${2:?Missing PATTERN}
+
+  local -a _like
+  local -a _unlike
+  local -i _idx=0
+
+  for _fn in "${_array[@]}"; do
+    # Split input fields into two distinct sets:
+    # 1. `_like'    Fields that match the given PATTERN
+    # 2. `_unlike'  Fields than don't match the PATTERN
+    if egrep "${_pattern}" <<< "${_fn}" > /dev/null; then
+      _like+=("${_fn}")
+    else
+      _unlike+=("${_fn}")
+    fi
+  done
+
+  # Export remaining fields
+  eval "${3}fields_like"='("${_like[@]}")'
+  eval "${3}fields_unlike"='("${_unlike[@]}")'
   #}}}
 }
 
@@ -446,6 +612,7 @@ function connect_files()
 
   local -r tmpdir=$(mktemp -d)
   cleanup_stack+=("rmdir '${tmpdir}'")
+  debug "Populating temporary directory \`${tmpdir}'..."
 
   # Open all input files and pass them to the xcat-tool to transparently
   # decompress them if needed. This also allows to handle the special `-' file
@@ -466,8 +633,10 @@ function connect_files()
     fi
 
     debug "Connecting input file \`${fn}' to fifo \`${fifo}'..."
-    if [ "-" != ${fn} ]; then xcat "${fn}" > "${fifo}" &
-    else cat <&0 > "${fifo}" &
+    if [ "-" != "${fn}" ]; then
+      xcat "${fn}" > "${fifo}" &
+    else 
+      cat <&0 > "${fifo}" &
     fi
 
   done
@@ -517,6 +686,7 @@ function open_files()
     local fd=$(next_fd)
     debug "Open file \`${fn}'(${fd})..."
 
+    # Open file descriptors read only
     eval "exec ${fd}<'${fn}'" || die -1 "Cannot open \`${fn}' with fd ${fd}!"
     fds+=("${fd}")
   done
@@ -534,7 +704,7 @@ function close_files()
   #{{{
   for fd in "$@"; do
     debug "Close file descriptor ${fd}."
-    eval "exec ${fd}>&-"
+    eval "exec ${fd}<&-"
   done
   #}}}
 }
@@ -583,8 +753,7 @@ function make_tempdir()
 function pretty_table()
 {
   #{{{
-  local -r fsep=${1}
-  shift || die -1 "Missing FS!"
+  local -r fsep=${1:?Missing FS}
 
   local -r column_bin=$(which column 2> /dev/null)
 
@@ -601,13 +770,14 @@ function pretty_table()
 function execute_cleanup_stack()
 {
   #{{{
-  local -ra stack=("${!1}")
+  local -ra _stack=("${!1}")
 
-  for((i = 1; i <= ${#stack[@]}; i += 1)); do
-    local cmd="${stack[$((-i))]}"
+  for((i = 1; i <= ${#_stack[@]}; i += 1)); do
+    local _cmd="${_stack[$((-i))]}"
 
-    debug "Clean-up: ${cmd}"
-    eval ${cmd}
+    debug "Clean-up: ${_cmd}"
+    # local __cmd=$(eval echo "${_cmd}")
+    eval ${_cmd} || warning "Clean-up failed: ${_cmd}"
   done
   #}}}
 }

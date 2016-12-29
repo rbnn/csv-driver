@@ -47,7 +47,7 @@ source xbase
 
 declare -r program_name=${0##*/}
 declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
-declare -r default_xfillna_nan='^[Nn][Aa][Nn]$'
+declare -r default_xfillna_nan='^[-+]?[Nn][Aa][Nn]$'
 declare -r default_xfillna_inf='[Ii][Nn][Ff]([Ii][Nn][Ii][Tt][Yy])?$'
 declare -r default_xfillna_field=value
 declare -r default_xfillna_pattern="${default_xfillna_nan}"
