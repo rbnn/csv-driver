@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# `#ifndef NAME/#define NAME'-like header inclusion scheme for bash. This block
+# will check, if the given variable is already defined. This normally only
+# happens, if the script has alrady been sourced.
+if [ -n "${XUTILS_XBASE_SH+x}" ]; then  return 0; fi
+declare -ri XUTILS_XBASE_SH=$(date +%s)
+
 # Author:   Ronny Biemann
 #           Copyright 2016
 # File:     xbase
@@ -31,6 +37,7 @@ set -e
 trap on_exit_execute_cleanup_stack EXIT # EXIT-signal
 
 # Enable support for bash-builtin script debugging (disable with set +o ... )
+# set -o nounset  # Fail on using variables, before they're declared
 # set -o verbose  # Echo commands before execution
 # set -o xtrace   # Echo commands after command-line processing
 # export PS4='$0:$LINENO: '  # Prefix for bash-builtind debug information
@@ -177,7 +184,7 @@ function warning()
 function die()
 {
   #{{{
-  return_code=${1:-1}
+  local -r _ecode=${1:-1}
   shift || true
 
   # Suppress printing call-stack, if column program (linux-utils) isn't found
@@ -196,7 +203,7 @@ function die()
 
   # Source: http://stackoverflow.com/a/9894126
   kill -s TERM ${top_level_pid}
-  exit $return_code
+  exit ${_ecode}
   #}}}
 }
 
@@ -263,7 +270,7 @@ EOF
 function join_by()
 {
   #{{{
-  join_by_str "${1}" "${2}"
+  join_by_str "${1}" "${2:-}"
   # # Read header names as first argument
   # local -ra _array=(${!1})
 
@@ -283,7 +290,7 @@ function join_by_str()
 {
   #{{{
   local -ra _array=(${!1})
-  local -r _fs=${2:-${xbase_fs}}
+  local -r _fs=${2-${xbase_fs}}
 
   local -i _n=${#_array[@]}
   local _str=""
@@ -773,13 +780,14 @@ function pretty_table()
 function execute_cleanup_stack()
 {
   #{{{
-  local -ra _stack=("${!1}")
+  local -ra _stack=("${!1-}")
 
   for((i = 1; i <= ${#_stack[@]}; i += 1)); do
     local _cmd="${_stack[$((-i))]}"
 
+    [ -z "${_cmd}" ] && continue
+
     debug "Clean-up: ${_cmd}"
-    # local __cmd=$(eval echo "${_cmd}")
     eval ${_cmd} || warning "Clean-up failed: ${_cmd}"
   done
   #}}}

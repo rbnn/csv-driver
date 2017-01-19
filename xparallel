@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# `#ifndef NAME/#define NAME'-like header inclusion scheme for bash. This block
+# will check, if the given variable is already defined. This normally only
+# happens, if the script has alrady been sourced.
+if [ -n ${XUTILS_XPARALLEL_SH+x} ]; then return 0; fi
+declare -ri XUTILS_XPARALLEL_SH=1
+
+source xbase
+# enable_debug=yes
+
+# Path to the binary of gnu-parallel
+export xparallel_binary=/usr/bin/parallel
+
+# Default gnu-parallel options:
+# --colsep=';'
+#   Split lines of semi-colon into separate arguments
+#
+# --halt-on-error=1
+#   Don't start new jobs if one ob fails, but wait until all currently running
+#   jobs finished or also failed.
+export xparallel_flags="--colsep=';' --halt-on-error=1"
+
+# Load the list of machines (hostnames or IPs) from that file. The library will
+# choose only these hosts, that can be accessed by gnu-parallel. I.e. offline
+# machines will be silently ignored.
+export xparallel_machines="${HOME}/.machines"
+
+# Usage: xparallel_run ...
+#
+# Localhost-only invocation of gnu-parallel. This only sets the default
+# parameters and passes all controll to gnu-parallel.
+function xparallel_run()
+{ #{{{
+  ${xparallel_binary} ${xparallel_flags} $@
+} #}}}
+
+# Usage: xparallel_net_run ...
+#
+# Cluster/Network invocation of gnu-parallel. This will distribute the workload
+# among a subset of the available machines. Therefor it calculates a list of
+# computations nodes, that can be accessed by gnu-parallel.
+function xparallel_net_run()
+{ #{{{
+  local -ra _nodes=($(xparallel_find_nodes "${xparallel_machines}"))
+  xparallel_run --sshlogin="$(join_by _nodes[@] ,)" $@
+} #}}}
+
+# Usage: xparallel_find_nodes FILE
+#
+# This functions reads the list of available machines from FILE and tries to
+# test, whetere gnu-parallel might access them. It will run a two-step test:
+# 1.  It will try to ping each machine once. If they don't respond within the
+#     timeout-period, they're considered as offline and won't be used in step
+#     two.
+# 2.  It will try to establish a ssh-connection and execute `/bin/nproc' in
+#     order to receive the available number of processors for each machine. If
+#     no connection could be established, the machine seems inaccessible by
+#     gnu-parallel. Otherwise it is assumed, that the machine is accessible by
+#     gnu-parallel.
+# The function will return a list of machines, that are assumed to be
+# ACCESSIBLE by gnu-parallel.
+function xparallel_find_nodes()
+{ #{{{
+  # Load file of default nodes
+  # Check for timestamp
+  # 1. If TS < THR: Accept, else re-check connection
+  local -r _fname=${1:?Missing FILE}
+
+  echo "$(nproc)/:"
+
+  if [ ! -e "${_fname}" ]; then
+    warning "No such file or directory: ${_fname}"
+    return 0
+  fi
+
+  while read node; do
+    if ping -c1 -W1 "${node}" > /dev/null; then
+      debug "Host ${node} is online"
+      _nproc=$(ssh -o ConnectTimeout=1 "${node}" nproc 2> /dev/null)
+
+      ((0 == $?)) || continue;
+      debug "Using host ${_nproc}/${node}"
+      echo "${_nproc}/${node}"
+    else
+      debug "Host ${node} seems offline."
+    fi
+  done <"${_fname}"
+} #}}}
+
+# # Save stdin for later use
+# declare -ri fd=$(next_fd)
+# eval "exec ${fd}<&0"
+# exec 0<&-
+# debug "Redirected stdin to ${fd}"
+# xparallel_net_run $@ <&${fd}

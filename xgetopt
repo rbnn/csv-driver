@@ -1,0 +1,176 @@
+#!/bin/bash
+
+# Include guards
+if [ -n "${XUTILS_XGETOPT_SH+x}" ]; then return 0; fi
+declare -ri XUTILS_XGETOPT_SH=$(date +%s)
+
+source xbase
+set -o nounset
+
+# Indent options and corresponding help string.
+declare    xgetopt_help_option_prefix="  "
+declare    xgetopt_help_string_prefix="    "
+# Format help message to not exceed `xgetopt_help_columns' characters per line.
+declare -i xgetopt_help_columns=${COLUMNS:-80}
+declare -i xgetopt_help_option_columns=$((xgetopt_help_columns - ${#xgetopt_help_option_prefix}))
+declare -i xgetopt_help_string_columns=$((xgetopt_help_columns - ${#xgetopt_help_string_prefix}))
+
+# Internal arrays to manage the options:
+# Array of preformatted long and short options for a given help message.
+declare -a xgetopt_help_option_string
+# Array of corresponding preformatted help messages (see above)
+declare -a xgetopt_help_option_help
+# Array of option strings (long+short).
+declare -a xgetopt_parse_string
+# Array of corresponding callback functions (see above).
+declare -a xgetopt_parse_callback
+
+# Usage: xgetopt_add_option OPTS ARG FUNC TEXT
+#
+# Add program options from OPTS. This is a comma separated list of short and
+# long options as used by getopt(3). The function parse every option and
+# requires all to accept the same number of arguments. ARG is used as argument
+# in the formatted help message and can be set to - if the option takes no
+# argument. FUNC is used as callback function when the option is read during a
+# run of `xgetopt_parse'. FUNC can be either a shell-function or any executable
+# in the current run-path. As `:'(colon) is the shell's no-operation, it can
+# serve as a stub-function for FUNC. TEXT is printed as description of the new
+# option to help users to understand the usage of the program.
+function xgetopt_add_option()
+{ #{{{
+  local -r _opt=${1:?Missing OPTION string}
+  local -r _arg=${2:?Missing ARGUMENT name}
+  local -r _fun=${3:?Missing CALLBACK function}
+  local -r _hlp=${4:?Missing HELP string}
+
+  debug "Add new option:"
+  debug ">> Callback: ${_fun}"
+
+  type "${_fun}" &> /dev/null || die -1 "No such function or executable: ${_fun}"
+
+  local -i _opt_type=-1
+  local -a _opt_names
+
+  for _key in ${_opt//,/ }; do
+
+    _tmp_name=(${_key%%:*})
+    _tmp_type=${_key:${#_tmp_name}}
+
+    (( -1 == ${_opt_type} )) && _opt_type=${#_tmp_type}
+    (( ${_opt_type} == ${#_tmp_type} )) || die -1 "Option \`${_key}' does not match previous specifications!"
+
+    if ((1 == "${#_tmp_name}")); then
+      # Current option is a short option
+      _opt_names+=("-${_tmp_name}")
+      xgetopt_parse_string+=("-${_key}")
+    else
+      # Current option is a long option
+      _opt_names+=("--${_tmp_name}")
+      xgetopt_parse_string+=("--${_key}")
+    fi
+
+    xgetopt_parse_callback+=("${_fun}")
+  done
+
+  local _opt_string="$(join_by _opt_names[@] ,\ )"
+  case ${_opt_type} in
+  1) _opt_string+=" ${_arg}" ;;
+  2) _opt_string+=" [${_arg}]";;
+  esac
+
+  xgetopt_help_option_string+=("${_opt_string}")
+  xgetopt_help_option_help+=("${_hlp}")
+} #}}}
+
+# Usage: xgetopt_parse ...
+#
+# Parse the options from the list of words and call the associated callback
+# functions.
+# Example: `xgetopt_parse $@' will parse all command-line options.
+function xgetopt_parse()
+{ #{{{
+  local -ri _n=${#xgetopt_parse_callback[@]}
+  local -r _program_name=${0##*/}
+
+  # Build long/short option string
+  _shrt_optstr=""
+  _long_optstr=""
+
+  for ((i = 0; i < _n; i += 1)); do
+    _opt=${xgetopt_parse_string[$i]}
+
+    if [[ ${_opt} == --* ]]; then
+      [ -n "${_long_optstr}" ] && _long_optstr+=","
+      _long_optstr+=${_opt:2}
+    else
+      _shrt_optstr+=${_opt:1}
+    fi
+  done
+
+  debug "Getopt arguments: --options=${_shrt_optstr} --longoptions=${_long_optstr} --name=${_program_name}"
+
+  local -r _args=$(getopt --options=${_shrt_optstr} \
+    --longoptions=${_long_optstr} \
+    --name="${_program_name}" -- "$@")
+  eval set -- "${_args}"
+
+  while true; do
+    _found_opt=no
+
+    for ((i = 0; i < _n; i += 1)); do
+      _str=${xgetopt_parse_string[$i]}
+      _fun=${xgetopt_parse_callback[$i]}
+
+      _opt=${_str%%:*}
+
+      if [ "${_opt}" == "${1}" ]; then
+        _found_opt=yes
+        ${_fun} ${2:-""} || die -1 "Callback failed: ${_fun}"
+
+        shift
+        [ -n "${_str:${#_opt}}" ] && shift
+
+        break
+      fi
+    done
+    [ no == ${_found_opt} ] && break
+  done
+
+  [ "--" == "${1}" ] && shift
+} #}}}
+
+# Usage: xgetopt_show_help
+#
+# Print formatted help message for all specified options.
+function xgetopt_show_help()
+{ #{{{
+  local -ri _n=${#xgetopt_help_option_string[@]}
+
+  for ((i = 0; i < _n; i += 1)); do
+    ((0 < i)) && echo ""
+    fold --width=${xgetopt_help_option_columns} --spaces <<<"${xgetopt_help_option_string[$i]}" \
+      | sed "s/^/${xgetopt_help_option_prefix}/"
+
+    fold --width=${xgetopt_help_string_columns} --spaces <<<"${xgetopt_help_option_help[$i]}" \
+      | sed "s/^/${xgetopt_help_string_prefix}/"
+  done
+} #}}}
+
+# Example
+function example_update_output()
+{
+  echo "Setting output file: ${1}"
+}
+
+function example_show_help()
+{
+  echo "Usage: ${0##*/} [OPT] ..."
+  echo ""
+  echo "Available flags for OPT:"
+  xgetopt_show_help
+}
+
+xgetopt_add_option o:,output: FILE example_update_output "Write output into FILE"
+xgetopt_add_option foo - : "Some lengthy description of an option that really does nothing else than filling up the whole line to show, what happens with such a long line inside the help message. The second argument - indicates, that no argument is passed."
+xgetopt_add_option h,help - example_show_help "Print this help message and terminate successfully."
+xgetopt_parse $@
