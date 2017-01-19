@@ -156,21 +156,21 @@ function xgetopt_show_help()
   done
 } #}}}
 
-# Example
-function example_update_output()
-{
-  echo "Setting output file: ${1}"
-}
-
-function example_show_help()
-{
-  echo "Usage: ${0##*/} [OPT] ..."
-  echo ""
-  echo "Available flags for OPT:"
-  xgetopt_show_help
-}
-
-xgetopt_add_option o:,output: FILE example_update_output "Write output into FILE"
-xgetopt_add_option foo - : "Some lengthy description of an option that really does nothing else than filling up the whole line to show, what happens with such a long line inside the help message. The second argument - indicates, that no argument is passed."
-xgetopt_add_option h,help - example_show_help "Print this help message and terminate successfully."
-xgetopt_parse $@
+# # Example
+# function example_update_output()
+# {
+#   echo "Setting output file: ${1}"
+# }
+# 
+# function example_show_help()
+# {
+#   echo "Usage: ${0##*/} [OPT] ..."
+#   echo ""
+#   echo "Available flags for OPT:"
+#   xgetopt_show_help
+# }
+# 
+# xgetopt_add_option o:,output: FILE example_update_output "Write output into FILE"
+# xgetopt_add_option foo - : "Some lengthy description of an option that really does nothing else than filling up the whole line to show, what happens with such a long line inside the help message. The second argument - indicates, that no argument is passed."
+# xgetopt_add_option h,help - example_show_help "Print this help message and terminate successfully."
+# xgetopt_parse $@
