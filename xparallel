@@ -3,8 +3,8 @@
 # `#ifndef NAME/#define NAME'-like header inclusion scheme for bash. This block
 # will check, if the given variable is already defined. This normally only
 # happens, if the script has alrady been sourced.
-if [ -n ${XUTILS_XPARALLEL_SH+x} ]; then return 0; fi
-declare -ri XUTILS_XPARALLEL_SH=1
+if [ -n "${XUTILS_XPARALLEL_SH+x}" ]; then return 0; fi
+declare -r XUTILS_XPARALLEL_SH=$(date +%s)
 
 source xbase
 # enable_debug=yes

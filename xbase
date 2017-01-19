@@ -4,7 +4,7 @@
 # will check, if the given variable is already defined. This normally only
 # happens, if the script has alrady been sourced.
 if [ -n "${XUTILS_XBASE_SH+x}" ]; then  return 0; fi
-declare -ri XUTILS_XBASE_SH=$(date +%s)
+declare -r XUTILS_XBASE_SH=$(date +%s)
 
 # Author:   Ronny Biemann
 #           Copyright 2016
