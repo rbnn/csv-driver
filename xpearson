@@ -5,13 +5,6 @@
 # File:     xpearson
 # License:  GPL-3.0
 
-function clean_up()
-{
-  #{{{
-  for file in "${temporary_files[@]}"; do rm -f "${file}" 2> /dev/null; done
-  #}}}
-}
-
 # Usage: generatePearsonRProgram X Y [PREDICATE]
 function generatePearsonRProgram()
 {
@@ -52,8 +45,6 @@ EOF
 }
 
 set -e
-trap clean_up 0 # EXIT-signal
-
 source xbase
 
 declare -r program_name=${0##*/}
@@ -62,7 +53,6 @@ declare -r default_xpearson_x=x
 declare -r default_xpearson_y=y
 declare -r default_xpearson_predicate=
 declare -r default_xpearson_flags=
-declare -a temporary_files
 
 # Initialize default field-separator
 fsep=$(set_fsep)
@@ -140,7 +130,7 @@ done
 
 # Create temporary file for awk-program
 declare -r awk_program=$(mktemp)
-temporary_files+=("${awk_program}")
+cleanup_stack+=("rm '${awk_program}'")
 
 declare -r user_x=${user_x:-${default_xpearson_x}}
 declare -r user_y=${user_y:-${default_xpearson_y}}

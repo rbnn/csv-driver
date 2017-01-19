@@ -5,30 +5,15 @@
 # File:     xjoin
 # License:  GPL-3.0
 
-function clean_up()
-{
-  #{{{
-  # Close file descriptors...
-  exec 5>&-
-  exec 4>&-
-
-  for file in "${temporary_files[@]}"; do rm -f "${file}" 2> /dev/null; done
-  rmdir "${tmpdir}" 2> /dev/null
-  true
-  #}}}
-}
-
 set -e
-trap clean_up 0 # EXIT-signal
-
 source xbase
+# trap clean_up 0 # EXIT-signal
 
 declare -r program_name=${0##*/}
 declare -r getopt_backend=$(find_program_like ${getopt_like_programs[@]})
 declare -r join_backend=$(find_program_like ${join_like_programs[@]})
 declare -r default_xjoin_no_check_order=no
 declare -r default_xjoin_flags=
-declare -a temporary_files
 
 # Initialize default field-separator
 fsep=$(set_fsep)
@@ -153,6 +138,7 @@ fi
 # multiple instances, a random temporary directory is created as base for the
 # current instance.
 declare -r tmpdir=$(mktemp -d)
+cleanup_stack+=("rmdir '${tmpdir}'")
 
 # Open left file as file descriptor(fd) 4:
 #
@@ -161,7 +147,7 @@ declare -r tmpdir=$(mktemp -d)
 if [ "-" != "${left_file}" ]; then
   declare -r left_in="${tmpdir}/left_in"
   mkfifo "${left_in}" || die -1 "Cannot create fifo \`${left_in}'!"
-  temporary_files+=("${left_in}")
+  cleanup_stack+=("rm '${left_in}'")
 
   xcat "${left_file}" > "${left_in}" &
   exec 4< "${left_in}" || die -1 "Cannot map \`${left_file}' to fd 4!"
@@ -175,7 +161,7 @@ fi
 if [ "-" != "${right_file}" ]; then
   declare -r right_in="${tmpdir}/right_in"
   mkfifo "${right_in}" || die -1 "Cannot create fifo \`${right_in}'!"
-  temporary_files+=("${right_in}")
+  cleanup_stack+=("rm '${right_in}'")
 
   xcat "${right_file}" > "${right_in}" &
   exec 5< "${right_in}" || die -1 "Cannot map \`${right_file}' to fd 5!"
@@ -221,10 +207,10 @@ declare -r left_fifo="${tmpdir}/left"
 declare -r right_fifo="${tmpdir}/right"
 
 mkfifo "${left_fifo}" || die -1 "Cannot create fifo \`${left_fifo}'!"
-temporary_files+=("${left_fifo}")
+cleanup_stack+=("rm '${left_fifo}'")
 
 mkfifo "${right_fifo}" || die -1 "Cannot create fifo \`${right_fifo}'!"
-temporary_files+=("${right_fifo}")
+cleanup_stack+=("rm '${right_fifo}'")
 
 # Connect file descriptors to fifos
 #

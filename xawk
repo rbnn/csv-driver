@@ -5,17 +5,7 @@
 # File:     xawk2
 # License:  GPL-3.0
 
-function clean_up()
-{
-  #{{{
-  # Delete temporary files
-  for file in "${temporary_files[@]}"; do rm -f "${file}"; done
-  #}}}
-}
-
 set -e
-trap clean_up 0 # EXIT-signal
-
 source xbase
 
 declare -r program_name=${0##*/}
@@ -26,7 +16,6 @@ declare -r default_xawk_pattern='[A-Za-z_][A-Za-z0-9_]*'
 declare -r awk_backend=$(find_program_like ${awk_like_programs[@]})
 declare -r egrep_backend=$(find_program_like ${egrep_like_programs[@]})
 declare -r sed_backend=$(find_program_like ${sed_like_programs[@]})
-declare -a temporary_files
 
 # Define pattern for valid column names
 awk_column_regex=${default_xawk_pattern}
@@ -158,7 +147,7 @@ if [ -r "${1:?Missing program or file}" ]; then
 else
   # Dump program passed via command line into temporary file.
   declare -r awk_in_file=$(mktemp)
-  temporary_files+=("${awk_in_file}")
+  cleanup_stack+=("rm '${awk_in_file}'")
   echo "$@" > "${awk_in_file}"
   shift $#
 
@@ -166,7 +155,7 @@ fi
 
 # Input/Output script
 declare -r awk_out_file=$(mktemp)
-temporary_files+=("${awk_out_file}")
+cleanup_stack+=("rm '${awk_out_file}'")
 
 # Find all column names in AWK-script
 declare -ra code_symbols=($(xcomment < "${awk_in_file}" | ${egrep_backend} -o "${awk_variable_pattern}" | sort | uniq))
